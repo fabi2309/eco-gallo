@@ -1,0 +1,103 @@
+<style>
+    :root {
+  --eco-green: #2e7d32;       /* Verde principal */
+  --eco-green-light: #4caf50; /* Verde claro */
+  --eco-blue: #1976d2;        /* Azul institucional */
+  --eco-yellow: #fbc02d;      /* Amarillo acento */
+  --eco-red: #d32f2f;         /* Rojo de alerta/destacado */
+  --bg-light: #f4f6f8;        /* Fondo general suave */
+  --text-dark: #333333;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-light);
+  color: var(--text-dark);
+  margin: 0;
+  padding: 0;
+}
+
+/* Barra de navegación superior o contenedores generales */
+.navbar, header {
+  background: linear-gradient(135deg, var(--eco-green), var(--eco-blue));
+  color: white;
+  padding: 1rem 2rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Botones principales en verde con acentos */
+button, .btn-submit {
+  background-color: var(--eco-green);
+  color: white;
+  border: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+
+button:hover {
+  background-color: var(--eco-green-light);
+}
+
+/* Botones secundarios o enlaces destacados en azul */
+a, .link-action {
+  color: var(--eco-blue);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Tarjetas de productos y contenedores */
+.post-card, .create-post-container, .login-container {
+  background: white;
+  border-radius: 10px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  border-top: 5px solid var(--eco-green);
+  margin-bottom: 1.5rem;
+}
+
+/* Detalles especiales con amarillo (etiquetas, precios o avisos) */
+.price, .badge-yellow {
+  background-color: var(--eco-yellow);
+  color: #5d4037;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-weight: bold;
+  display: inline-block;
+}
+
+/* Alertas o errores en rojo */
+.error, .alert-danger {
+  color: var(--eco-red);
+  background-color: #ffebee;
+  border: 1px solid var(--eco-red);
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+/* Formularios limpios */
+input, select, textarea {
+  width: 100%;
+  padding: 0.7rem;
+  margin-top: 0.3rem;
+  margin-bottom: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--eco-blue);
+  box-shadow: 0 0 5px rgba(25, 118, 210, 0.3);
+}
+</style>
