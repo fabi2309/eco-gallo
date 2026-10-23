@@ -23,6 +23,9 @@ export class LoginComponent {
   onLogin() {
     this.auth.login(this.credentials).subscribe({
       next: (res: any) => {
+        if (res.token) {
+          localStorage.setItem('token', res.token);
+        }
         localStorage.setItem('user', JSON.stringify(res.user));
         this.router.navigate(['/home']);
       },

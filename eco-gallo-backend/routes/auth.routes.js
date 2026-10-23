@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const authenticateToken = require('../middleware/auth.middleware');
 const User = require('../models/User');
 
 // Ruta de Registro
@@ -60,7 +62,16 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ message: 'Tu cuenta de egresado está pendiente de revisión por el administrador.' });
     }
 
-    res.json({ message: 'Inicio de sesión exitoso', user });
+    const token = jwt.sign(
+      { id: user.id, email: user.email, username: user.username, userType: user.userType },
+      process.env.JWT_SECRET || 'eco_gallo_secret_key_default',
+      { expiresIn: '7d' }
+    );
+
+    const safeUser = user.toJSON();
+    delete safeUser.password;
+
+    res.json({ message: 'Inicio de sesión exitoso', token, user: safeUser });
   } catch (err) {
     console.error('Error en login:', err);
     res.status(500).json({ message: 'Error en el servidor al iniciar sesión', error: err.message });
@@ -68,9 +79,13 @@ router.post('/login', async (req, res) => {
 });
 
 // Ruta para actualizar perfil del usuario
-router.put('/profile/:id', async (req, res) => {
+router.put('/profile/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (req.user.id !== parseInt(id, 10)) {
+      return res.status(403).json({ message: 'No tienes permiso para modificar este perfil.' });
+    }
     const { username, email, password } = req.body;
 
     const user = await User.findByPk(id);

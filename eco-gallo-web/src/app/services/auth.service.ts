@@ -23,7 +23,25 @@ export class AuthService {
     return this.http.put(`${this.apiUrl}/profile/${id}`, userData);
   }
 
+  getToken(): string | null {
+    return localStorage.getItem('token');
+  }
+
+  getUser(): any {
+    const user = localStorage.getItem('user');
+    return user ? JSON.parse(user) : null;
+  }
+
+  isLoggedIn(): boolean {
+    return !!this.getToken();
+  }
+
+  logout(): void {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  }
+
   getPostById(id: string | number): Observable<any> {
-  return this.http.get(`${this.apiUrl}/${id}`); // O `${this.apiUrl}/posts/${id}` según cómo manejes tus rutas
-}
+    return this.http.get(`${this.apiUrl}/${id}`);
+  }
 }
