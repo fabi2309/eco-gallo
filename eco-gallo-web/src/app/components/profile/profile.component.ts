@@ -70,7 +70,7 @@ export class ProfileComponent implements OnInit {
   }
 
   logout(): void {
-    localStorage.removeItem('user');
+    this.authService.logout();
     alert('Sesión cerrada correctamente');
     this.router.navigate(['/login']);
   }

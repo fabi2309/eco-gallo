@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const Post = require('../models/Post');
 const User = require('../models/User'); // <-- Asegúrate de importar el modelo User para el include
+const authenticateToken = require('../middleware/auth.middleware');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -40,7 +41,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // 3. Crear una publicación
-router.post('/', upload.single('image'), async (req, res) => {
+router.post('/', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     const { title, description, category, physicalState, price, authorId } = req.body;
     const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
@@ -52,7 +53,7 @@ router.post('/', upload.single('image'), async (req, res) => {
       physicalState,
       price: price ? Number(price) : null,
       image: imageUrl,
-      authorId: authorId || 1
+      authorId: req.user.id
     });
 
     res.status(201).json({ message: 'Publicación creada con éxito', post: newPost });
@@ -63,13 +64,17 @@ router.post('/', upload.single('image'), async (req, res) => {
 });
 
 // 4. Actualizar una publicación
-router.put('/:id', upload.single('image'), async (req, res) => {
+router.put('/:id', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     const { title, description, category, physicalState, price } = req.body;
     const post = await Post.findByPk(req.params.id);
     
     if (!post) {
       return res.status(404).json({ message: 'Publicación no encontrada' });
+    }
+
+    if (post.authorId !== req.user.id) {
+      return res.status(403).json({ message: 'No tienes permiso para actualizar esta publicación' });
     }
 
     const imageUrl = req.file ? `/uploads/${req.file.filename}` : post.image;
@@ -90,12 +95,16 @@ router.put('/:id', upload.single('image'), async (req, res) => {
 });
 
 // 5. Eliminar una publicación
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const post = await Post.findByPk(req.params.id);
     
     if (!post) {
       return res.status(404).json({ message: 'Publicación no encontrada' });
+    }
+
+    if (post.authorId !== req.user.id) {
+      return res.status(403).json({ message: 'No tienes permiso para eliminar esta publicación' });
     }
 
     await post.destroy();
