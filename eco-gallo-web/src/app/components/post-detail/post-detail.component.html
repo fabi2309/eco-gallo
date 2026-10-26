@@ -1,0 +1,35 @@
+<div class="detail-container" *ngIf="post">
+  <button routerLink="/home" class="btn-back">← Volver al inicio</button>
+
+  <div class="detail-card">
+    <!-- Imagen del producto -->
+    <img *ngIf="post.image" [src]="'http://localhost:5000' + post.image" alt="Imagen del producto" class="detail-img" />
+
+    <div class="detail-content">
+      <h1>{{ post.title }}</h1>
+      <p class="price">${{ post.price }}</p>
+      
+      <div class="badges-container">
+        <span class="badge-yellow"><strong>Categoría:</strong> {{ post.category }}</span>
+        <span class="badge-yellow"><strong>Estado físico:</strong> {{ post.physicalState }}</span>
+      </div>
+
+      <div class="description-section">
+        <h3>Descripción completa</h3>
+        <p>{{ post.description }}</p>
+      </div>
+
+      <!-- Tarjeta con la información real del vendedor -->
+      <div class="seller-card" *ngIf="post.User">
+        <h3>Información del Vendedor</h3>
+        <p><strong>Usuario:</strong> {{ post.User.username }}</p>
+        <p><strong>Correo:</strong> {{ post.User.email }}</p>
+
+        <!-- Botón simulado de contacto -->
+        <button class="btn-contact-simulated" (click)="contactarVendedor()">
+          💬 Contactar al vendedor
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

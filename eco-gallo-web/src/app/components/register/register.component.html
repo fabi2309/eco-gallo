@@ -1,0 +1,40 @@
+<div class="auth-container">
+  <h2>Registro - ECO-GALLO</h2>
+  <form (ngSubmit)="onRegister()">
+    <div class="form-group">
+      <label>Nombre de usuario:</label>
+      <input type="text" [(ngModel)]="user.username" name="username" required />
+    </div>
+
+    <div class="form-group">
+      <label>Tipo de usuario:</label>
+      <select [(ngModel)]="user.userType" name="userType" required>
+        <option value="student">Estudiante</option>
+        <option value="alumni">Egresado</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Correo electrónico:</label>
+      <input type="email" [(ngModel)]="user.email" name="email" [placeholder]="user.userType === 'student' ? 'al350114&#64;edu.uaa.mx' : 'correo personal'" required />
+      <small *ngIf="user.userType === 'student'">Debe ser tu ID institucional (ej. al123456&#64;edu.uaa.mx)</small>
+    </div>
+
+    <div class="form-group" *ngIf="user.userType === 'alumni'">
+      <label>Subir captura de Kárdex:</label>
+      <input type="text" [(ngModel)]="user.kardexImage" name="kardexImage" placeholder="Enlace de la imagen del kárdex" required />
+      <small>Requerido para validación manual del administrador (respuesta en 3 días).</small>
+    </div>
+
+    <div class="form-group">
+      <label>Contraseña:</label>
+      <input type="password" [(ngModel)]="user.password" name="password" required />
+    </div>
+
+    <button type="submit" class="btn-submit">Registrarse</button>
+  </form>
+
+  <p class="error" *ngIf="errorMessage">{{ errorMessage }}</p>
+  <p class="success" *ngIf="successMessage">{{ successMessage }}</p>
+  <p class="switch-auth">¿Ya tienes cuenta? <a routerLink="/login">Inicia sesión</a></p>
+</div>

@@ -1,6 +1,10 @@
+<<<<<<< HEAD
    data/*
    !data/.gitkeep
    __pycache__/
    gateway/out/
    *.sqlite*
    .env
+=======
+**/node_modules
+>>>>>>> 1fc4a6df98e6d6636e07c039594a6755959c040f

@@ -1,0 +1,61 @@
+<div class="profile-container" *ngIf="user">
+  <div class="profile-header-banner">
+    <h2>Mi Perfil — ECO-GALLO</h2>
+  </div>
+
+  <div class="profile-card-content">
+    <div class="profile-avatar-container">
+      <img [src]="user.avatarUrl || 'https://cdn-icons-png.flaticon.com/512/847/847969.png'" alt="Foto de perfil" class="profile-avatar" />
+    </div>
+
+    <!-- Mensajes de feedback -->
+    <div *ngIf="message" class="alert alert-success">{{ message }}</div>
+    <div *ngIf="errorMessage" class="alert alert-danger">{{ errorMessage }}</div>
+
+    <!-- MODO LECTURA -->
+    <div class="profile-info" *ngIf="!isEditing">
+      <div class="info-row">
+        <span class="label">Nombre de Usuario:</span>
+        <span class="value">{{ user.username }}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Correo institucional:</span>
+        <span class="value">{{ user.email }}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Tipo de Usuario:</span>
+        <span class="value">{{ user.userType }}</span>
+      </div>
+      
+      <button (click)="isEditing = true" class="btn-edit">Editar Perfil</button>
+    </div>
+
+    <!-- MODO EDICIÓN -->
+    <form (ngSubmit)="updateProfile()" class="profile-info" *ngIf="isEditing">
+      <div class="info-row">
+        <label class="label">Nombre de Usuario:</label>
+        <input type="text" [(ngModel)]="formData.username" name="username" class="value-input" required />
+      </div>
+
+      <div class="info-row">
+        <label class="label">Correo institucional:</label>
+        <input type="email" [(ngModel)]="formData.email" name="email" class="value-input" required />
+      </div>
+
+      <div class="info-row">
+        <label class="label">Nueva contraseña:</label>
+        <input type="password" [(ngModel)]="formData.password" name="password" placeholder="Opcional" class="value-input" />
+      </div>
+
+      <div class="edit-actions">
+        <button type="submit" class="btn-save">Guardar Cambios</button>
+        <button type="button" (click)="isEditing = false" class="btn-cancel">Cancelar</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="profile-actions">
+    <button routerLink="/home" class="btn-home">Volver al inicio</button>
+    <button (click)="logout()" class="btn-logout">Cerrar Sesión</button>
+  </div>
+</div>
