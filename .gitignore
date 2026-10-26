@@ -1,0 +1,6 @@
+   data/*
+   !data/.gitkeep
+   __pycache__/
+   gateway/out/
+   *.sqlite*
+   .env
