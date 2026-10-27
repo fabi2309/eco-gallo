@@ -65,7 +65,7 @@ Autenticación (código, contraseña, egresados verificados) · Publicaciones (h
 Búsqueda y filtros (texto, categoría, tipo, centro, **estado del producto y rango de precio**) con **búsquedas recientes** ·
 **Lista de deseos** (aviso en la campana cuando alguien publica algo que coincide; se revisa cada 30 s) ·
 Perfil con **foto y biografía** · **Modo oscuro** · Mensajería por publicación
-con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Panel de administración (disputas, reportes, usuarios) ·
+con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Panel de administración (disputas, reportes, usuarios, respaldos del sistema) ·
 Dashboard de impacto (CO₂e estimado por categoría).
 
 ## Pruebas
@@ -73,7 +73,7 @@ Arranca con `ECOGALLO_ADMINS=admin@edu.uaa.mx ./run.sh` y luego `python3 tests/e
 
 ## Estructura
 ```
-backend/   app.py config.py db.py security.py auth.py posts.py orders.py payments.py social.py admin.py seed.py
+backend/   app.py config.py db.py security.py auth.py posts.py orders.py payments.py social.py admin.py seed.py backups.py
 gateway/   Gateway.java
 frontend/  index.html css/app.css js/{main,api,ui}.js js/views/*.js
 data/      (se crea sola) base SQLite, fotos subidas y clave secreta

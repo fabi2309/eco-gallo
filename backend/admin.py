@@ -133,3 +133,49 @@ def suspend(uid):
     if suspended:
         db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
     return jsonify({"ok": True})
+
+
+# ------------------------------------------------------------- Respaldos
+@bp.get("/backups")
+@admin_required
+def get_backups():
+    from backups import list_backups
+    return jsonify({
+        "ok": True,
+        "backups": list_backups(),
+        "config": {
+            "enabled": config.BACKUP_ENABLED,
+            "interval_hours": config.BACKUP_INTERVAL_HOURS,
+            "keep": config.BACKUP_KEEP,
+        },
+    })
+
+
+@bp.post("/backups")
+@admin_required
+def trigger_backup():
+    from backups import create_backup
+    tag = (request.get_json(silent=True) or {}).get("tag", "manual")
+    info = create_backup(tag=tag)
+    return jsonify({"ok": True, "backup": info})
+
+
+@bp.get("/backups/<filename>/download")
+@admin_required
+def download_backup(filename):
+    from backups import get_backup_path
+    path = get_backup_path(filename)
+    if not path:
+        return api_error("Archivo de respaldo no encontrado.", 404)
+    resp = send_from_directory(config.BACKUPS_DIR, path.name, as_attachment=True)
+    resp.headers["Cache-Control"] = "no-store, private"
+    return resp
+
+
+@bp.delete("/backups/<filename>")
+@admin_required
+def remove_backup(filename):
+    from backups import delete_backup
+    if not delete_backup(filename):
+        return api_error("No se pudo eliminar el archivo de respaldo.", 404)
+    return jsonify({"ok": True})
