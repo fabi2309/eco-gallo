@@ -1,10 +1,28 @@
-<<<<<<< HEAD
-   data/*
-   !data/.gitkeep
-   __pycache__/
-   gateway/out/
-   *.sqlite*
-   .env
-=======
-**/node_modules
->>>>>>> 1fc4a6df98e6d6636e07c039594a6755959c040f
+# Datos generados por la aplicación (SQLite, sesiones, subidas)
+data/*
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Java / Gateway
+gateway/out/
+*.class
+
+# Bases de datos y variables de entorno
+*.sqlite*
+.env
+.env.*
+!.env.example
+
+# Dependencias / editores
+**/node_modules/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
