@@ -232,5 +232,13 @@ for _ in range(50):
     time.sleep(1)
 check("dev_code" in r, "egresado registrado también puede entrar con código")
 s, r = Client().call("POST", "/api/auth/login", {"email": e, "password": "clave12345"}); check(s == 200, "y la contraseña vuelve a funcionar")
+print("Respaldos del sistema")
+s, r = buyer.call("GET", "/api/admin/backups"); check(s == 403, "usuario regular no accede a respaldos")
+s, r = admin2.call("GET", "/api/admin/backups"); check(s == 200 and "backups" in r, "admin lista respaldos")
+s, r = admin2.call("POST", "/api/admin/backups", {"tag": "e2e"}); check(s == 200 and "backup" in r, "admin genera respaldo")
+b_name = r["backup"]["filename"]
+s, r = admin2.call("GET", f"/api/admin/backups/{b_name}/download"); check(s == 200, "admin descarga archivo de respaldo")
+s, r = admin2.call("DELETE", f"/api/admin/backups/{b_name}"); check(s == 200, "admin elimina respaldo")
+
 print("\nRESULTADO:", "FALLÓ" if check.failed else "TODO OK")
 sys.exit(1 if check.failed else 0)

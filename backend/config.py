@@ -96,3 +96,10 @@ CO2_KG = {
 }
 
 SAFE_MEETING_POINTS = ["La Velaria", "Cafetería CCB", "Punto de Encuentro Central"]
+
+# --- Respaldos automáticos ---
+BACKUPS_DIR = DATA / "backups"
+BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_ENABLED = os.environ.get("ECOGALLO_BACKUP_ENABLED", "1") == "1"
+BACKUP_INTERVAL_HOURS = float(os.environ.get("ECOGALLO_BACKUP_INTERVAL_HOURS", "24"))
+BACKUP_KEEP = int(os.environ.get("ECOGALLO_BACKUP_KEEP", "7"))
