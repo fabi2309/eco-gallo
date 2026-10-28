@@ -179,3 +179,46 @@ def remove_backup(filename):
     if not delete_backup(filename):
         return api_error("No se pudo eliminar el archivo de respaldo.", 404)
     return jsonify({"ok": True})
+
+
+@bp.post("/backups/<filename>/restore")
+@admin_required
+def restore_system_backup(filename):
+    from backups import get_backup_path, restore_backup
+    path = get_backup_path(filename)
+    if not path:
+        return api_error("Archivo de respaldo no encontrado.", 404)
+
+    token = request.cookies.get(config.COOKIE_NAME)
+    try:
+        result = restore_backup(filename, session_token=token, admin_user=g.user)
+    except ValueError as e:
+        return api_error(str(e), 400)
+    except Exception as e:
+        import logging
+        logging.getLogger("ecogallo.backups").exception("Error al restaurar respaldo: %s", e)
+        return api_error("Error interno al restaurar el respaldo.", 500)
+
+    return jsonify({"ok": True, "restore": result, "message": "Respaldo restaurado exitosamente."})
+
+
+@bp.post("/backups/upload")
+@admin_required
+def upload_backup_file():
+    file = request.files.get("backup_file")
+    if not file or not file.filename:
+        return api_error("No se seleccionó ningún archivo de respaldo.", 400)
+    if not file.filename.lower().endswith(".zip"):
+        return api_error("El archivo debe ser un paquete .zip.", 400)
+
+    from backups import save_uploaded_backup
+    try:
+        info = save_uploaded_backup(file)
+    except ValueError as e:
+        return api_error(str(e), 400)
+    except Exception as e:
+        import logging
+        logging.getLogger("ecogallo.backups").exception("Error al guardar respaldo subido: %s", e)
+        return api_error("Error interno al procesar el archivo subido.", 500)
+
+    return jsonify({"ok": True, "backup": info, "message": "Respaldo subido y verificado exitosamente."})
