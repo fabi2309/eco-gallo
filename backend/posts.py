@@ -80,9 +80,8 @@ def images_for(db, ids: list[int]) -> dict[int, list[str]]:
     if not ids:
         return out
     q = ",".join("?" * len(ids))
-    for r in db.execute(
-        f"SELECT post_id, filename FROM post_images WHERE post_id IN ({q}) ORDER BY position, id", ids
-    ):
+    query = f"SELECT post_id, filename FROM post_images WHERE post_id IN ({q}) ORDER BY position, id"
+    for r in db.execute(query, ids):  # nosec B608
         out[r["post_id"]].append(r["filename"])
     return out
 
