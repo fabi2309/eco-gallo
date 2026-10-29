@@ -18,13 +18,13 @@ jobs:
 
     steps:
       # ======================================================================
-      # 1. Descarga de código fuente desde los pasos del YAML (5%)
+      # 1. Descarga de código fuente desde los pasos del YAML
       # ======================================================================
       - name: 1. Descargar código fuente del repositorio
         uses: actions/checkout@v4
 
       # ======================================================================
-      # 2. Configuración del entorno y dependencias desde los pasos de YAML (5%)
+      # 2. Configuración del entorno y dependencias desde los pasos de YAML
       # ======================================================================
       - name: 2.1 Configurar entorno Python (3.11)
         uses: actions/setup-python@v5
@@ -45,7 +45,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       # ======================================================================
-      # Compilación del proyecto (Nota de la Rúbrica)
+      # Compilación del proyecto
       # ======================================================================
       - name: Compilación del Gateway oficial (Java)
         run: |
@@ -53,14 +53,14 @@ jobs:
           echo "Compilación de Gateway completada con éxito."
 
       # ======================================================================
-      # 3. Configuración de Análisis estáticos de código (Linting) (15%)
+      # 3. Configuración de Análisis estáticos de código (Linting)
       # ======================================================================
       - name: 3. Análisis estático de código (Flake8 Linting)
         run: |
           flake8 backend tests --config=.flake8 --count --statistics
 
       # ======================================================================
-      # 4. Configuración de Análisis de Vulnerabilidades (15%)
+      # 4. Configuración de Análisis de Vulnerabilidades
       # ======================================================================
       - name: 4.1 Análisis de vulnerabilidades en código con Bandit
         run: |
@@ -71,14 +71,14 @@ jobs:
           pip-audit -r backend/requirements.txt
 
       # ======================================================================
-      # 5. Configuración para ejecución de pruebas unitarias (15%)
+      # 5. Configuración para ejecución de pruebas unitarias 
       # ======================================================================
       - name: 5. Ejecución de pruebas unitarias automatizadas (Pytest)
         run: |
           pytest tests/test_unit.py -v
 
       # ======================================================================
-      # 6. Configuración para ejecución de pruebas de integración (20%)
+      # 6. Configuración para ejecución de pruebas de integración
       # ======================================================================
       - name: 6. Ejecución de pruebas de integración E2E
         env:
@@ -92,7 +92,7 @@ jobs:
           python tests/e2e_api.py http://localhost:8080
 
       # ======================================================================
-      # 7. Configuración para realizar el empaquetado del proyecto (Docker) (25%)
+      # 7. Configuración para realizar el empaquetado del proyecto (Docker) 
       # ======================================================================
       - name: 7.1 Configurar Docker Buildx
         uses: docker/setup-buildx-action@v3
