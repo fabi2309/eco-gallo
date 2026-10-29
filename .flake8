@@ -1,0 +1,22 @@
+[flake8]
+max-line-length = 140
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    ENV,
+    data,
+    documentos,
+    gateway/out,
+    tests/e2e_api.py
+ignore =
+    E402,
+    W503,
+    E203,
+    E501,
+    E701,
+    E702
+per-file-ignores =
+    backend/__init__.py:F401
+    backend/config.py:F401

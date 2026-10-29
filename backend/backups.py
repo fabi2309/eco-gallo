@@ -10,7 +10,6 @@ Aplica política de rotación reteniendo los N respaldos más recientes.
 import datetime
 import json
 import logging
-import os
 import pathlib
 import sqlite3
 import tempfile

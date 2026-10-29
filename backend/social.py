@@ -125,8 +125,11 @@ def report():
     if ttype not in ("post", "user") or not reason or len(reason) < 5:
         return api_error("Cuéntanos el motivo del reporte.")
     db = get_db()
-    table = "posts" if ttype == "post" else "users"
-    if not db.execute(f"SELECT 1 FROM {table} WHERE id=?", (tid,)).fetchone():
+    if ttype == "post":
+        exists = db.execute("SELECT 1 FROM posts WHERE id=?", (tid,)).fetchone()
+    else:
+        exists = db.execute("SELECT 1 FROM users WHERE id=?", (tid,)).fetchone()
+    if not exists:
         return api_error("No encontrado.", 404)
     db.execute(
         "INSERT INTO reports(reporter_id,target_type,target_id,reason,created_at) VALUES(?,?,?,?,?)",
