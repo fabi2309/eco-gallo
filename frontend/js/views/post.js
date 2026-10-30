@@ -23,6 +23,20 @@ export async function render(root, { args, state, go, refresh }) {
       <div class="seller">${avatar(p.author)}
         <div class="grow"><b>${esc(p.author.name)}</b><div class="muted small">${esc(p.author.carrera || p.author.centro)}</div>
         ${p.author.bio ? `<div class="small bio">${esc(p.author.bio)}</div>` : ""}</div></div>
+      ${mine ? `
+        <div class="panelbox stack" style="margin:14px 0 6px;padding:12px 14px;background:var(--bg-card)">
+          <b class="small muted" style="letter-spacing:.03em">ESTADÍSTICAS DE TU PUBLICACIÓN</b>
+          <div class="row wrap" style="gap:18px;font-size:.95rem">
+            <span title="Total de visualizaciones">${icon("eye")} <b>${p.stats?.views || 0}</b> vistas</span>
+            <span title="Personas que te han contactado por mensaje">${icon("chat")} <b>${p.stats?.contacts || 0}</b> contactos</span>
+            <span title="Personas que guardaron o tienen en lista de deseos">${icon("heart")} <b>${p.stats?.interested || 0}</b> interesados</span>
+          </div>
+        </div>` : `
+        <div style="margin:12px 0 4px">
+          <button class="btn sm ${p.is_favorited ? "green" : "ghost"}" id="favbtn" style="width:100%">
+            ${icon("heart")} <span>${p.is_favorited ? "Guardado en tus favoritos" : "Guardar (avisarme si baja de precio)"}</span>
+          </button>
+        </div>`}
       <div id="actions" class="stack"></div>
     </div>
   </div>`;
@@ -55,6 +69,19 @@ export async function render(root, { args, state, go, refresh }) {
       await api.del(`/api/posts/${p.id}`); toast("Publicación eliminada"); go("#/mine");
     });
     return;
+  }
+
+  const favbtn = root.querySelector("#favbtn");
+  if (favbtn) {
+    favbtn.onclick = async () => {
+      try {
+        const r = await api.post(`/api/posts/${p.id}/favorite`);
+        toast(r.favorited ? "Guardado en tus favoritos. Te avisaremos si baja de precio." : "Eliminado de tus favoritos");
+        refresh();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
   }
 
   if (venta && p.status === "active") {

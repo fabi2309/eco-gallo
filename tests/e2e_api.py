@@ -4,7 +4,7 @@ import http.cookiejar, json, sys, urllib.request, urllib.error, uuid
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080"
 
 class Client:
     def __init__(self):
@@ -276,6 +276,67 @@ uploaded_b_name = r["backup"]["filename"]
 # Eliminar respaldos de prueba
 s, r = admin2.call("DELETE", f"/api/admin/backups/{b_name}"); check(s == 200, "admin elimina respaldo")
 s, r = admin2.call("DELETE", f"/api/admin/backups/{uploaded_b_name}"); check(s == 200, "admin elimina respaldo subido")
+
+print("Métricas de publicación, favoritos y alertas de lista de deseos")
+# Seller vuelve a iniciar sesión
+seller = Client()
+s, r = seller.call("POST", "/api/auth/login", {"email": e, "password": "clave12345"})
+check(s == 200, "seller vuelve a iniciar sesión")
+
+# Crear un nuevo post de venta con seller
+body, h = multipart({
+    "title": f"Libro de Física {tag}",
+    "description": "Edición especial para ingenierías",
+    "category": "Libros",
+    "centro": "Centro de Ciencias Básicas",
+    "tipo": "venta",
+    "price": "350.00",
+    "condition": "Como nuevo",
+}, [("images", "fisica.png", png)])
+s, r = seller.call("POST", "/api/posts", raw=body, headers=h)
+check(s == 201 and "id" in r, "crea publicación de prueba para métricas y alertas")
+f_post_id = r["id"]
+
+# Buyer consulta la publicación (incrementa vistas)
+s, r = buyer.call("GET", f"/api/posts/{f_post_id}")
+check(s == 200 and r["post"]["stats"]["views"] >= 1, "la visualización por otro usuario incrementa el contador de vistas")
+
+# Buyer guarda en favoritos
+s, r = buyer.call("POST", f"/api/posts/{f_post_id}/favorite")
+check(s == 200 and r["favorited"] is True, "usuario guarda publicación en favoritos")
+
+# Listar favoritos
+s, r = buyer.call("GET", "/api/favorites")
+check(s == 200 and f_post_id in r["post_ids"], "publicación aparece en la lista de favoritos del usuario")
+
+# Liberar espacio en la lista de deseos de buyer y agregar deseo coincidente
+s, r = buyer.call("GET", "/api/wishlist")
+if r.get("items"):
+    buyer.call("DELETE", f"/api/wishlist/{r['items'][0]['id']}")
+s, r = buyer.call("POST", "/api/wishlist", {"term": "Física", "category": "Libros"})
+check(s == 201, "buyer registra deseo coincidente")
+
+# Seller consulta estadísticas de su publicación
+s, r = seller.call("GET", f"/api/posts/{f_post_id}")
+check(s == 200 and r["post"]["stats"]["interested"] >= 1, "estadísticas reflejan personas interesadas (favoritos + deseos)")
+
+# Seller baja el precio de $350.00 a $280.00
+body, h = multipart({
+    "title": f"Libro de Física {tag}",
+    "description": "Edición especial para ingenierías",
+    "category": "Libros",
+    "centro": "Centro de Ciencias Básicas",
+    "tipo": "venta",
+    "price": "280.00",
+    "condition": "Como nuevo",
+}, [("images", "fisica.png", png)])
+s, r = seller.call("PUT", f"/api/posts/{f_post_id}", raw=body, headers=h)
+check(s == 200, "seller actualiza publicación bajando el precio")
+
+# Buyer revisa sus notificaciones y debe tener la alerta de bajó de precio
+s, r = buyer.call("GET", "/api/notifications")
+has_drop_alert = any("Bajó de precio" in n["text"] and "$280.00" in n["text"] for n in r.get("notifications", []))
+check(s == 200 and has_drop_alert, "buyer recibe notificación automática por reducción de precio")
 
 print("\nRESULTADO:", "FALLÓ" if check.failed else "TODO OK")
 sys.exit(1 if check.failed else 0)

@@ -9,7 +9,9 @@ import sys
 # Agregar backend al path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
-import config
+# Por defecto en desarrollo local activamos el modo DEV para pruebas inmediatas
+os.environ.setdefault("ECOGALLO_DEV", "1")
+
 from app import create_app
 from flask import send_from_directory
 

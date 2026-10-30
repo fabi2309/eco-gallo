@@ -56,8 +56,28 @@ def parse_price(raw) -> int | None:
     return int((value * 100).to_integral_value())
 
 
-def serialize(row: dict, images: list[str]) -> dict:
+def post_stats(db, post_id: int, author_id: int, views_count: int = 0, title: str = "",
+               desc: str = "", cat: str = "", centro: str = "") -> dict:
+    """Métricas detalladas por publicación: vistas, contactos e interesados."""
+    contacts = db.execute(
+        "SELECT COUNT(DISTINCT sender_id) c FROM messages WHERE post_id=? AND sender_id != ?",
+        (post_id, author_id)
+    ).fetchone()["c"]
+
+    fav_users = {r[0] for r in db.execute("SELECT user_id FROM favorites WHERE post_id=?", (post_id,)).fetchall()}
+    from wishlist import get_matching_wishlist_users
+    wish_users = get_matching_wishlist_users(db, post_id, author_id, title, desc, cat, centro)
+    interested = len(fav_users.union(wish_users))
+
     return {
+        "views": views_count,
+        "contacts": contacts,
+        "interested": interested,
+    }
+
+
+def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
+    out = {
         "id": row["id"], "title": row["title"], "description": row["description"],
         "category": row["category"], "centro": row["centro"], "tipo": row["tipo"],
         "price_cents": row["price_cents"], "condition": row["condition"],
@@ -68,6 +88,15 @@ def serialize(row: dict, images: list[str]) -> dict:
                    "avatar": f"/uploads/{row['author_avatar']}" if row["author_avatar"] else ""},
         "images": [f"/uploads/{n}" for n in images],
     }
+    if stats is not None:
+        out["stats"] = stats
+    elif "views_count" in row:
+        out["stats"] = {
+            "views": row.get("views_count", 0),
+            "contacts": row.get("contacts_count", 0),
+            "interested": row.get("interested_count", 0),
+        }
+    return out
 
 
 BASE_SELECT = """SELECT p.*, u.name AS author_name, u.carrera AS author_carrera,
@@ -144,7 +173,13 @@ def list_posts():
              "caro": "p.price_cents DESC, p.id DESC"}.get(request.args.get("sort", "nuevo"), "p.id DESC")
     posts = rows(db.execute(f"{BASE_SELECT} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT 100", args))
     imgs = images_for(db, [p["id"] for p in posts])
-    return jsonify({"ok": True, "posts": [serialize(p, imgs[p["id"]]) for p in posts]})
+    is_mine = request.args.get("mine") == "1"
+    out_posts = []
+    for p in posts:
+        s = post_stats(db, p["id"], p["author_id"], p.get("views_count", 0),
+                       p["title"], p["description"], p["category"], p["centro"]) if is_mine else None
+        out_posts.append(serialize(p, imgs[p["id"]], stats=s))
+    return jsonify({"ok": True, "posts": out_posts})
 
 
 @bp.get("/posts/<int:pid>")
@@ -156,7 +191,19 @@ def get_post(pid):
                    and g.user["role"] != "admin"):
         return api_error("Publicación no encontrada.", 404)
     row = dict(row)
-    out = serialize(row, images_for(db, [pid])[pid])
+
+    # Incrementar vistas si quien consulta no es el autor
+    if g.user["id"] != row["author_id"]:
+        db.execute("UPDATE posts SET views_count = views_count + 1 WHERE id=?", (pid,))
+        row["views_count"] = (row.get("views_count") or 0) + 1
+
+    stats = post_stats(db, pid, row["author_id"], row.get("views_count", 0),
+                       row["title"], row["description"], row["category"], row["centro"])
+    out = serialize(row, images_for(db, [pid])[pid], stats=stats)
+
+    is_fav = bool(db.execute("SELECT 1 FROM favorites WHERE user_id=? AND post_id=?", (g.user["id"], pid)).fetchone())
+    out["is_favorited"] = is_fav
+
     order = db.execute(
         """SELECT id, buyer_id, status FROM orders WHERE post_id=? AND status IN
            ('HELD','DELIVERED','DISPUTED') LIMIT 1""", (pid,)
@@ -252,6 +299,13 @@ def update_post(pid):
             db.execute("DELETE FROM post_images WHERE post_id=?", (pid,))
             for i, name in enumerate(saved):
                 db.execute("INSERT INTO post_images(post_id,filename,position) VALUES(?,?,?)", (pid, name, i))
+        # Notificar si baja de precio
+        old_price = post["price_cents"]
+        new_price = fields["price_cents"]
+        if post["tipo"] == "venta" and fields["tipo"] == "venta" and new_price < old_price:
+            from wishlist import notify_price_drop
+            notify_price_drop(db, pid, post["author_id"], fields["title"], fields["category"],
+                              fields["centro"], old_price, new_price, fields["description"])
     return jsonify({"ok": True})
 
 
