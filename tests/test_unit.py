@@ -2,6 +2,7 @@
 
 Diseñado para ejecutarse con pytest tanto localmente como en GitHub Actions (Rúbrica: 15%).
 """
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 import catalog  # noqa: E402
 from backups import get_backup_path, human_size  # noqa: E402
-from posts import parse_price, sniff_image  # noqa: E402
+from posts import parse_price, post_stats, sniff_image  # noqa: E402
+from wishlist import _fold, get_matching_wishlist_users, notify_price_drop  # noqa: E402
 from security import (  # noqa: E402
     check_password,
     clean_text,
@@ -143,3 +145,84 @@ class TestPriceAndBackups:
         assert get_backup_path("../../etc/passwd") is None
         assert get_backup_path("archivo_cualquiera.txt") is None
         assert get_backup_path("ecogallo_backup_invalido.tar.gz") is None
+
+
+class TestWishlistAndStats:
+    def test_fold_accent_and_case_normalization(self):
+        assert _fold("Cálculo Integral y Diferencial") == "calculo integral y diferencial"
+        assert _fold("ÁÉÍÓÚñ") == "aeioun"
+        assert _fold("BATA DE LABORATORIO") == "bata de laboratorio"
+
+    def test_get_matching_wishlist_users_filters(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE users (id INTEGER, suspended INTEGER)")
+        conn.execute("CREATE TABLE wishlist (id INTEGER, user_id INTEGER, term TEXT, category TEXT, centro TEXT)")
+
+        # Usuario 2 busca "calculo" sin filtro de categoría ni centro
+        # Usuario 3 busca "estetoscopio"
+        # Usuario 4 busca "calculo" pero para otra categoría
+        # Usuario 5 suspendido busca "calculo"
+        conn.execute("INSERT INTO users VALUES (2, 0), (3, 0), (4, 0), (5, 1)")
+        conn.execute("INSERT INTO wishlist VALUES (1, 2, 'calculo', '', '')")
+        conn.execute("INSERT INTO wishlist VALUES (2, 3, 'estetoscopio', 'Salud', '')")
+        conn.execute("INSERT INTO wishlist VALUES (3, 4, 'calculo', 'Electrónica', '')")
+        conn.execute("INSERT INTO wishlist VALUES (4, 5, 'calculo', '', '')")
+
+        matched = get_matching_wishlist_users(
+            conn, post_id=10, author_id=1,
+            title="Libro de Cálculo Stewart", description="En buen estado",
+            category="Libros", centro="Centro de Ciencias Básicas"
+        )
+        assert 2 in matched
+        assert 3 not in matched  # término diferente
+        assert 4 not in matched  # categoría no coincide
+        assert 5 not in matched  # usuario suspendido
+
+    def test_post_stats_metrics_aggregation(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE messages (id INTEGER, post_id INTEGER, sender_id INTEGER)")
+        conn.execute("CREATE TABLE favorites (id INTEGER, user_id INTEGER, post_id INTEGER)")
+        conn.execute("CREATE TABLE users (id INTEGER, suspended INTEGER)")
+        conn.execute("CREATE TABLE wishlist (id INTEGER, user_id INTEGER, term TEXT, category TEXT, centro TEXT)")
+
+        # 2 personas mandaron mensajes a la publicación 100 (autor es 1)
+        conn.execute("INSERT INTO messages VALUES (1, 100, 2), (2, 100, 2), (3, 100, 3)")
+        # 2 personas guardaron en favoritos (usuarios 3 y 4)
+        conn.execute("INSERT INTO favorites VALUES (1, 3, 100), (2, 4, 100)")
+        # Usuario 5 tiene en lista de deseos "bata"
+        conn.execute("INSERT INTO users VALUES (5, 0)")
+        conn.execute("INSERT INTO wishlist VALUES (1, 5, 'bata', '', '')")
+
+        stats = post_stats(
+            conn, post_id=100, author_id=1, views_count=42,
+            title="Bata blanca de laboratorio", desc="Talla M", cat="Ropa", centro="CCBA"
+        )
+        assert stats["views"] == 42
+        assert stats["contacts"] == 2  # usuarios 2 y 3
+        # Interesados: favoritos (3, 4) + wishlist (5) = 3 personas
+        assert stats["interested"] == 3
+
+    def test_notify_price_drop_alerts(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE favorites (user_id INTEGER, post_id INTEGER)")
+        conn.execute("CREATE TABLE wishlist (user_id INTEGER, term TEXT, category TEXT, centro TEXT)")
+        conn.execute("CREATE TABLE users (id INTEGER, suspended INTEGER)")
+        conn.execute("CREATE TABLE messages (post_id INTEGER, sender_id INTEGER)")
+        conn.execute("CREATE TABLE notifications (id INTEGER, user_id INTEGER, text TEXT, link TEXT, created_at INTEGER)")
+
+        conn.execute("INSERT INTO favorites VALUES (2, 10)")
+        conn.execute("INSERT INTO messages VALUES (10, 3)")
+
+        notified_count = notify_price_drop(
+            conn, post_id=10, author_id=1, title="Calculadora Científica",
+            category="Electrónica", centro="CCB", old_price_cents=50000, new_price_cents=35000
+        )
+        assert notified_count == 2
+        rows = conn.execute("SELECT * FROM notifications").fetchall()
+        assert len(rows) == 2
+        assert "$350.00" in rows[0]["text"]
+        assert "$500.00" in rows[0]["text"]
+        assert "link" in rows[0].keys() and rows[0]["link"] == "#/post/10"
