@@ -31,6 +31,7 @@ bp = Blueprint("auth", __name__, url_prefix="/api")
 GENERIC_OK = "Si el correo está registrado, te enviamos un código. Revisa tu bandeja (y spam)."
 BAD_LOGIN = "Correo o contraseña incorrectos. Si aún no tienes contraseña, entra con un código."
 
+
 def _totp_challenge_response(user: dict):
     """Crea un desafío temporal sin otorgar todavía una sesión."""
     db = get_db()
@@ -51,6 +52,7 @@ def _totp_challenge_response(user: dict):
         "challenge_expires_in": 300,
     })
 
+
 def _generate_recovery_codes(db, user: dict):
     """Genera y almacena códigos de recuperación de un solo uso."""
     db.execute(
@@ -70,6 +72,7 @@ def _generate_recovery_codes(db, user: dict):
         )
 
     return codes
+
 
 def public_user(u: dict) -> dict:
     return {
@@ -201,7 +204,7 @@ def verify():
         db.execute("UPDATE users SET email_verified=1, failed_logins=0, locked_until=0 WHERE email=?", (email,))
     user = dict(db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
     if user["suspended"]:
-       return api_error("Tu cuenta está suspendida. Contacta a la administración.", 403)
+        return api_error("Tu cuenta está suspendida. Contacta a la administración.", 403)
 
     if user["totp_enabled"]:
         return _totp_challenge_response(user)
@@ -245,9 +248,10 @@ def login_password():
     db.execute("UPDATE users SET failed_logins=0, locked_until=0 WHERE id=?", (user["id"],))
 
     if user["totp_enabled"]:
-       return _totp_challenge_response(user)
+        return _totp_challenge_response(user)
 
     return _session_response(user)
+
 
 @bp.post("/auth/totp/verify")
 def verify_totp_login():
@@ -368,6 +372,7 @@ def verify_totp_login():
 
     return _session_response(user)
 
+
 @bp.post("/auth/totp/setup")
 @login_required
 def setup_totp():
@@ -411,6 +416,7 @@ def setup_totp():
         "expires_in": 600,
     })
 
+
 @bp.post("/auth/totp/confirm")
 @login_required
 def confirm_totp():
@@ -431,59 +437,70 @@ def confirm_totp():
         ).fetchone()
 
         if not row or not row["totp_pending_secret"]:
-            return api_error("Primero debes iniciar la configuración del autenticador.", 400)
+            return api_error(
+                "Primero debes iniciar la configuración del autenticador.",
+                400,
+            )
 
         if row["totp_pending_expires_at"] <= t:
             db.execute(
-        """UPDATE users
-           SET totp_pending_secret='',
-                totp_pending_expires_at=0
-            WHERE id=?""",
-            (g.user["id"],),
-        )
-        return api_error("La configuración del autenticador ha caducado. Iníciala nuevamente.",400)
+                """UPDATE users
+                   SET totp_pending_secret='',
+                       totp_pending_expires_at=0
+                   WHERE id=?""",
+                (g.user["id"],),
+            )
+            return api_error(
+                "La configuración del autenticador ha caducado. "
+                "Iníciala nuevamente.",
+                400,
+            )
 
-    try:
+        try:
             secret = decrypt_totp_secret(row["totp_pending_secret"])
-    except InvalidToken:
-                    logging.error(
-                        "No se pudo descifrar el secreto TOTP pendiente del usuario %s",
-                        g.user["id"],
-                    )
-                    return api_error(
-                        "No se pudo verificar el autenticador. Intenta configurarlo nuevamente.",
-                        500,
-                    )
+        except InvalidToken:
+            logging.error(
+                "No se pudo descifrar el secreto TOTP pendiente del usuario %s",
+                g.user["id"],
+            )
+            return api_error(
+                "No se pudo verificar el autenticador. "
+                "Intenta configurarlo nuevamente.",
+                500,
+            )
 
-    counter = verify_totp_counter(
-                    secret,
-                    code,
-                    row["totp_last_counter"],
-                )
+        counter = verify_totp_counter(
+            secret,
+            code,
+            row["totp_last_counter"],
+        )
 
-    if counter is None:
-            return api_error("El código no es correcto. Inténtalo nuevamente.", 400)
+        if counter is None:
+            return api_error(
+                "El código no es correcto. Inténtalo nuevamente.",
+                400,
+            )
 
-    db.execute(
-            db.execute(
+        db.execute(
             """UPDATE users
-               SET totp_enabled=0,
-                   totp_secret='',
+               SET totp_enabled=1,
+                   totp_secret=totp_pending_secret,
                    totp_pending_secret='',
                    totp_pending_expires_at=0,
                    totp_last_counter=?
                WHERE id=?""",
-        (counter, user["id"]),
+            (counter, g.user["id"]),
         )
-    )
 
-    recovery_codes = _generate_recovery_codes(db, dict(row))
+        recovery_codes = _generate_recovery_codes(db, dict(row))
 
     return jsonify({
         "ok": True,
         "totp_enabled": True,
         "recovery_codes": recovery_codes,
     })
+
+
 @bp.post("/auth/totp/recovery/regenerate")
 @login_required
 def regenerate_recovery_codes():
@@ -540,6 +557,7 @@ def regenerate_recovery_codes():
         "ok": True,
         "recovery_codes": recovery_codes,
     })
+
 
 @bp.post("/auth/totp/disable")
 @login_required
@@ -617,6 +635,7 @@ def disable_totp():
         "totp_enabled": False,
         "message": "La autenticación de dos factores fue desactivada.",
     })
+
 
 @bp.put("/auth/password")
 @login_required

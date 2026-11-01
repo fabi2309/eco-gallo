@@ -233,6 +233,7 @@ class TestWishlistAndStats:
         assert "$500.00" in rows[0]["text"]
         assert "link" in rows[0].keys() and rows[0]["link"] == "#/post/10"
 
+
 class TestTwoFactorAuthentication:
 
     def test_totp_secret_generation(self):

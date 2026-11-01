@@ -12,7 +12,7 @@ from functools import wraps
 from flask import g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
@@ -22,6 +22,7 @@ from db import get_db, now
 log = logging.getLogger("ecogallo")
 
 # ----------------------------------------------------------- cifrado TOTP
+
 
 def _totp_fernet():
     """Genera una clave de cifrado independiente a partir del secreto principal."""
@@ -45,6 +46,7 @@ def decrypt_totp_secret(encrypted_secret: str) -> str:
     """Descifra un secreto TOTP almacenado en SQLite."""
     fernet = _totp_fernet()
     return fernet.decrypt(encrypted_secret.encode("utf-8")).decode("utf-8")
+
 
 EMAIL_RE = re.compile(
     r"^[a-z0-9][a-z0-9._%+\-]{0,63}@[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?"
@@ -123,6 +125,7 @@ def hash_code(email: str, code: str) -> str:
 def hash_token(token: str) -> str:
     return _hmac(f"session:{token}")
 
+
 def hash_challenge(token: str) -> str:
     return _hmac(f"totp-challenge:{token}")
 
@@ -131,6 +134,7 @@ def new_code() -> str:
     return f"{secrets.randbelow(10 ** 6):06d}"
 
 # ----------------------------------------------------------- autenticacion TOTP
+
 
 def new_totp_secret() -> str:
     """Genera un secreto aleatorio para una aplicación autenticadora."""
