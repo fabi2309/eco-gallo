@@ -7,17 +7,22 @@ Tres formas de entrar:
 """
 import hmac
 import logging
+import secrets
 import uuid
 
 from flask import Blueprint, g, jsonify, request
+from cryptography.fernet import InvalidToken
 
 import catalog
 import config
 from db import get_db, now, rows, tx
 from security import (
-    api_error, check_password, clean_text, client_ip, create_session, hash_code, hash_password,
-    hash_token, is_institutional, login_required, new_code, normalize_email, notify,
-    password_problem, send_code_email, sniff_document,
+    api_error, check_password, clean_text, client_ip, create_session,
+    decrypt_totp_secret, encrypt_totp_secret,
+    hash_challenge, hash_code, hash_password, hash_token,
+    is_institutional, login_required, new_code, new_totp_secret,
+    normalize_email, notify, password_problem, send_code_email,
+    sniff_document, totp_provisioning_uri, verify_totp_counter,
 )
 
 log = logging.getLogger("ecogallo")
@@ -27,12 +32,56 @@ GENERIC_OK = "Si el correo está registrado, te enviamos un código. Revisa tu b
 BAD_LOGIN = "Correo o contraseña incorrectos. Si aún no tienes contraseña, entra con un código."
 
 
+def _totp_challenge_response(user: dict):
+    """Crea un desafío temporal sin otorgar todavía una sesión."""
+    db = get_db()
+    token = secrets.token_urlsafe(32)
+    t = now()
+
+    db.execute(
+        """INSERT INTO auth_challenges
+           (token_hash, user_id, expires_at, attempts, used, created_at)
+           VALUES (?, ?, ?, 0, 0, ?)""",
+        (hash_challenge(token), user["id"], t + 300, t),
+    )
+
+    return jsonify({
+        "ok": True,
+        "needs_totp": True,
+        "challenge_token": token,
+        "challenge_expires_in": 300,
+    })
+
+
+def _generate_recovery_codes(db, user: dict):
+    """Genera y almacena códigos de recuperación de un solo uso."""
+    db.execute(
+        "DELETE FROM totp_recovery_codes WHERE user_id=?",
+        (user["id"],),
+    )
+
+    codes = [secrets.token_hex(6).upper() for _ in range(10)]
+    t = now()
+
+    for code in codes:
+        db.execute(
+            """INSERT INTO totp_recovery_codes
+               (user_id, code_hash, used, created_at)
+               VALUES (?, ?, 0, ?)""",
+            (user["id"], hash_code(user["email"], code), t),
+        )
+
+    return codes
+
+
 def public_user(u: dict) -> dict:
     return {
         "id": u["id"], "email": u["email"], "name": u["name"], "carrera": u["carrera"],
         "centro": u["centro"], "role": u["role"], "created_at": u["created_at"],
         "kind": u["kind"], "verif_status": u["verif_status"],
-        "has_password": bool(u["password_hash"]), "bio": u["bio"],
+        "has_password": bool(u["password_hash"]),
+        "totp_enabled": bool(u["totp_enabled"]),
+        "bio": u["bio"],
         "avatar": f"/uploads/{u['avatar']}" if u["avatar"] else "",
     }
 
@@ -156,6 +205,10 @@ def verify():
     user = dict(db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
     if user["suspended"]:
         return api_error("Tu cuenta está suspendida. Contacta a la administración.", 403)
+
+    if user["totp_enabled"]:
+        return _totp_challenge_response(user)
+
     return _session_response(user)
 
 
@@ -193,7 +246,395 @@ def login_password():
         return api_error("Falta confirmar tu correo. Entra con un código para activarlo.", 403,
                          needs_email_verification=True)
     db.execute("UPDATE users SET failed_logins=0, locked_until=0 WHERE id=?", (user["id"],))
+
+    if user["totp_enabled"]:
+        return _totp_challenge_response(user)
+
     return _session_response(user)
+
+
+@bp.post("/auth/totp/verify")
+def verify_totp_login():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("challenge_token", "")).strip()
+    code = str(data.get("code", "")).strip().replace(" ", "").upper()
+
+    is_totp = code.isdigit() and len(code) == 6
+    is_recovery = len(code) == 12 and all(c in "0123456789ABCDEF" for c in code)
+
+    if not token or not (is_totp or is_recovery):
+        return api_error("Ingresa un código de autenticación o recuperación válido.", 400)
+
+    db = get_db()
+    t = now()
+    resp = None
+    user = None
+
+    with tx(db):
+        challenge = db.execute(
+            """SELECT * FROM auth_challenges
+               WHERE token_hash=? AND used=0 AND expires_at>?""",
+            (hash_challenge(token), t),
+        ).fetchone()
+
+        if not challenge:
+            resp = api_error("El desafío venció o no es válido. Inicia sesión nuevamente.", 401)
+
+        elif challenge["attempts"] >= 5:
+            db.execute(
+                "UPDATE auth_challenges SET used=1 WHERE id=?",
+                (challenge["id"],),
+            )
+            resp = api_error("Demasiados intentos. Inicia sesión nuevamente.", 429)
+
+        else:
+            user_row = db.execute(
+                "SELECT * FROM users WHERE id=?",
+                (challenge["user_id"],),
+            ).fetchone()
+
+            if not user_row or user_row["suspended"] or not user_row["totp_enabled"]:
+                db.execute(
+                    "UPDATE auth_challenges SET used=1 WHERE id=?",
+                    (challenge["id"],),
+                )
+                resp = api_error("No es posible acceder a esta cuenta.", 403)
+
+            else:
+                user = dict(user_row)
+                valid = False
+                counter = None
+                decrypt_failed = False
+
+                if is_totp:
+                    try:
+                        secret = decrypt_totp_secret(user["totp_secret"])
+                    except InvalidToken:
+                        decrypt_failed = True
+                        logging.error(
+                            "No se pudo descifrar el secreto TOTP del usuario %s",
+                            user["id"],
+                        )
+                        db.execute(
+                            "UPDATE auth_challenges SET used=1 WHERE id=?",
+                            (challenge["id"],),
+                        )
+                        resp = api_error(
+                            "No se pudo verificar el autenticador. Contacta a soporte.",
+                            500,
+                        )
+                    else:
+                        counter = verify_totp_counter(
+                            secret,
+                            code,
+                            user["totp_last_counter"],
+                        )
+                        valid = counter is not None
+
+                elif is_recovery:
+                    code_hash = hash_code(user["email"], code)
+
+                    recovery = db.execute(
+                        """SELECT id FROM totp_recovery_codes
+                           WHERE user_id=? AND code_hash=? AND used=0""",
+                        (user["id"], code_hash),
+                    ).fetchone()
+
+                    if recovery:
+                        db.execute(
+                            "UPDATE totp_recovery_codes SET used=1 WHERE id=? AND used=0",
+                            (recovery["id"],),
+                        )
+                        valid = True
+
+                if not valid and not decrypt_failed:
+                    attempts = challenge["attempts"] + 1
+                    db.execute(
+                        "UPDATE auth_challenges SET attempts=?, used=? WHERE id=?",
+                        (attempts, int(attempts >= 5), challenge["id"]),
+                    )
+                    resp = api_error("Código incorrecto. Verifica tus datos e inténtalo nuevamente.", 400)
+
+                elif valid:
+                    db.execute(
+                        "UPDATE auth_challenges SET used=1 WHERE id=?",
+                        (challenge["id"],),
+                    )
+
+                    if counter is not None:
+                        db.execute(
+                            "UPDATE users SET totp_last_counter=? WHERE id=?",
+                            (counter, user["id"]),
+                        )
+
+    if resp:
+        return resp
+
+    return _session_response(user)
+
+
+@bp.post("/auth/totp/setup")
+@login_required
+def setup_totp():
+    db = get_db()
+
+    with tx(db):
+        row = db.execute(
+            "SELECT * FROM users WHERE id=?",
+            (g.user["id"],),
+        ).fetchone()
+
+        if not row:
+            return api_error("No se encontró la cuenta.", 404)
+
+        user = dict(row)
+
+        if user["totp_enabled"]:
+            return api_error(
+                "La autenticación de dos factores ya está activada.",
+                400,
+            )
+
+        secret = new_totp_secret()
+        encrypted_secret = encrypt_totp_secret(secret)
+        expires_at = now() + 600
+
+        db.execute(
+            """UPDATE users
+               SET totp_pending_secret=?,
+                   totp_pending_expires_at=?
+               WHERE id=?""",
+            (encrypted_secret, expires_at, user["id"]),
+        )
+
+    uri = totp_provisioning_uri(secret, user["email"])
+
+    return jsonify({
+        "ok": True,
+        "secret": secret,
+        "provisioning_uri": uri,
+        "expires_in": 600,
+    })
+
+
+@bp.post("/auth/totp/confirm")
+@login_required
+def confirm_totp():
+    data = request.get_json(silent=True) or {}
+    code = str(data.get("code", "")).strip().replace(" ", "")
+
+    if not code.isdigit() or len(code) != 6:
+        return api_error("Ingresa un código válido de 6 dígitos.", 400)
+
+    db = get_db()
+    t = now()
+    recovery_codes = None
+
+    with tx(db):
+        row = db.execute(
+            "SELECT * FROM users WHERE id=?",
+            (g.user["id"],),
+        ).fetchone()
+
+        if not row or not row["totp_pending_secret"]:
+            return api_error(
+                "Primero debes iniciar la configuración del autenticador.",
+                400,
+            )
+
+        if row["totp_pending_expires_at"] <= t:
+            db.execute(
+                """UPDATE users
+                   SET totp_pending_secret='',
+                       totp_pending_expires_at=0
+                   WHERE id=?""",
+                (g.user["id"],),
+            )
+            return api_error(
+                "La configuración del autenticador ha caducado. "
+                "Iníciala nuevamente.",
+                400,
+            )
+
+        try:
+            secret = decrypt_totp_secret(row["totp_pending_secret"])
+        except InvalidToken:
+            logging.error(
+                "No se pudo descifrar el secreto TOTP pendiente del usuario %s",
+                g.user["id"],
+            )
+            return api_error(
+                "No se pudo verificar el autenticador. "
+                "Intenta configurarlo nuevamente.",
+                500,
+            )
+
+        counter = verify_totp_counter(
+            secret,
+            code,
+            row["totp_last_counter"],
+        )
+
+        if counter is None:
+            return api_error(
+                "El código no es correcto. Inténtalo nuevamente.",
+                400,
+            )
+
+        db.execute(
+            """UPDATE users
+               SET totp_enabled=1,
+                   totp_secret=totp_pending_secret,
+                   totp_pending_secret='',
+                   totp_pending_expires_at=0,
+                   totp_last_counter=?
+               WHERE id=?""",
+            (counter, g.user["id"]),
+        )
+
+        recovery_codes = _generate_recovery_codes(db, dict(row))
+
+    return jsonify({
+        "ok": True,
+        "totp_enabled": True,
+        "recovery_codes": recovery_codes,
+    })
+
+
+@bp.post("/auth/totp/recovery/regenerate")
+@login_required
+def regenerate_recovery_codes():
+    data = request.get_json(silent=True) or {}
+    code = str(data.get("code", "")).strip()
+    password = data.get("password", "")
+
+    if not code.isdigit() or len(code) != 6:
+        return api_error("Ingresa un código TOTP válido de 6 dígitos.", 400)
+
+    db = get_db()
+
+    with tx(db):
+        row = db.execute(
+            "SELECT * FROM users WHERE id=?",
+            (g.user["id"],),
+        ).fetchone()
+
+        if not row or not row["totp_enabled"]:
+            return api_error("La autenticación en dos pasos no está activada.", 400)
+
+        user = dict(row)
+
+        if user["password_hash"]:
+            if not isinstance(password, str) or not check_password(user, password):
+                return api_error("La contraseña actual es incorrecta.", 400)
+
+        try:
+            secret = decrypt_totp_secret(user["totp_secret"])
+        except InvalidToken:
+            logging.error(
+                "No se pudo descifrar el secreto TOTP del usuario %s",
+                user["id"],
+            )
+            return api_error("No se pudo verificar el autenticador.", 500)
+
+        counter = verify_totp_counter(
+            secret,
+            code,
+            user["totp_last_counter"],
+        )
+
+        if counter is None:
+            return api_error("El código de autenticación es incorrecto.", 400)
+
+        db.execute(
+            "UPDATE users SET totp_last_counter=? WHERE id=?",
+            (counter, user["id"]),
+        )
+
+        recovery_codes = _generate_recovery_codes(db, user)
+
+    return jsonify({
+        "ok": True,
+        "recovery_codes": recovery_codes,
+    })
+
+
+@bp.post("/auth/totp/disable")
+@login_required
+def disable_totp():
+    data = request.get_json(silent=True) or {}
+    code = str(data.get("code", "")).strip().replace(" ", "")
+    password = data.get("password", "")
+
+    if not code.isdigit() or len(code) != 6:
+        return api_error("Ingresa un código TOTP válido de 6 dígitos.", 400)
+
+    db = get_db()
+
+    with tx(db):
+        row = db.execute(
+            "SELECT * FROM users WHERE id=?",
+            (g.user["id"],),
+        ).fetchone()
+
+        if not row or not row["totp_enabled"]:
+            return api_error(
+                "La autenticación de dos factores no está activada.",
+                400,
+            )
+
+        user = dict(row)
+
+        if user["password_hash"]:
+            if not isinstance(password, str) or not check_password(user, password):
+                return api_error("La contraseña actual es incorrecta.", 400)
+
+        try:
+            secret = decrypt_totp_secret(user["totp_secret"])
+        except InvalidToken:
+            logging.error(
+                "No se pudo descifrar el secreto TOTP del usuario %s",
+                user["id"],
+            )
+            return api_error(
+                "No se pudo verificar el autenticador. Contacta a soporte.",
+                500,
+            )
+
+        counter = verify_totp_counter(
+            secret,
+            code,
+            user["totp_last_counter"],
+        )
+
+        if counter is None:
+            return api_error("El código de autenticación es incorrecto.", 400)
+
+        db.execute(
+            """UPDATE users
+               SET totp_enabled=0,
+                   totp_secret='',
+                   totp_pending_secret='',
+                   totp_last_counter=?
+               WHERE id=?""",
+            (counter, user["id"]),
+        )
+
+        db.execute(
+            "DELETE FROM totp_recovery_codes WHERE user_id=?",
+            (user["id"],),
+        )
+
+        db.execute(
+            "DELETE FROM auth_challenges WHERE user_id=?",
+            (user["id"],),
+        )
+
+    return jsonify({
+        "ok": True,
+        "totp_enabled": False,
+        "message": "La autenticación de dos factores fue desactivada.",
+    })
 
 
 @bp.put("/auth/password")

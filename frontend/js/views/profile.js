@@ -49,6 +49,55 @@ async function profile(root, { state, refresh }) {
         ${pwField("new_password2", "Repite la nueva contraseña")}
         <div id="pwerr"></div>
         <button class="btn">${u.has_password ? "Cambiar contraseña" : "Guardar contraseña"}</button></form></div>
+            <div class="panelbox stack" id="totp-panel">
+      <h3>Autenticación en dos pasos</h3>
+      <p class="muted small">
+        Protege tu cuenta solicitando un código de tu aplicación
+        autenticadora al iniciar sesión.
+      </p>
+      ${u.totp_enabled
+        ? `<p class="pill ok">${icon("shield")} Autenticación activada</p>
+           <form id="totp-disable" class="stack" novalidate>
+             <label class="field">
+               Código de tu autenticador
+               <input class="input" name="code" inputmode="numeric"
+                 autocomplete="one-time-code" maxlength="6" required>
+             </label>
+             ${u.has_password ? `
+               <label class="field">
+                 Contraseña actual
+                 <input class="input" name="password" type="password"
+                   autocomplete="current-password" required>
+               </label>` : ""}
+                          <button class="btn danger">Desactivar autenticación</button>
+           </form>
+           <div class="divider"></div>
+           <h4>Recuperación de cuenta</h4>
+           <p class="muted small">
+             Si pierdes tus códigos de recuperación, puedes generar
+             otros nuevos. Los anteriores dejarán de funcionar.
+           </p>
+           <form id="totp-regenerate" class="stack" novalidate>
+             <label class="field">
+               Código de tu autenticador
+               <input class="input" name="code" inputmode="numeric"
+                 autocomplete="one-time-code" maxlength="6" required>
+             </label>
+             ${u.has_password ? `
+               <label class="field">
+                 Contraseña actual
+                 <input class="input" name="password" type="password"
+                   autocomplete="current-password" required>
+               </label>` : ""}
+                          <button class="btn">Generar nuevos códigos</button>
+           </form>`
+        : `<p class="muted small">Actualmente está desactivada.</p>
+           <button class="btn" id="totp-start">
+             Activar autenticación en dos pasos
+           </button>`
+          }
+      <div id="totp-message"></div>
+    </div>
     <div class="panelbox stack"><h3>Historial de actividad</h3>
       ${orders.orders.length ? `<div class="log">${orders.orders.slice(0, 8).map((o) => `<div><a href="#/order/${o.id}">${esc(o.post_title)}</a> · ${o.role === "buyer" ? "compra" : "venta"} · ${money(o.amount_cents)}<br><span class="muted">${esc(o.status)} · ${timeAgo(o.updated_at)}</span></div>`).join("")}</div>` : '<p class="muted">Todavía no hay movimientos.</p>'}</div>
     <div class="row wrap"><a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
@@ -64,6 +113,137 @@ async function profile(root, { state, refresh }) {
     try { const r = await api.form("POST", "/api/me/avatar", fd); appState.user.avatar = r.avatar; toast("Foto actualizada"); ctxRefresh(); } catch (er) { toast(er.message, true); }
   };
   root.querySelector("#avdel")?.addEventListener("click", async () => { await api.del("/api/me/avatar"); toast("Foto quitada"); ctxRefresh(); });
+    root.querySelector("#totp-start")?.addEventListener("click", async () => {
+    const message = root.querySelector("#totp-message");
+
+    try {
+      const res = await api.post("/api/auth/totp/setup", {});
+
+      message.innerHTML = `
+        <div class="stack">
+          <h4>Vincula tu aplicación autenticadora</h4>
+          <p class="muted small">
+            Agrega una cuenta manualmente en Google Authenticator,
+            Microsoft Authenticator o una aplicación compatible.
+          </p>
+          <label class="field">
+            Clave secreta
+            <input class="input" value="${esc(res.secret)}" readonly>
+          </label>
+          <p class="hint">
+            También puedes usar este enlace de configuración:
+          </p>
+          <textarea class="input" rows="3" readonly>${esc(res.provisioning_uri)}</textarea>
+          <form id="totp-confirm" class="stack">
+            <label class="field">
+              Código de seis dígitos de tu aplicación
+              <input class="input" name="code" inputmode="numeric"
+                autocomplete="one-time-code" maxlength="6" required>
+            </label>
+            <button class="btn">Confirmar y activar</button>
+          </form>
+        </div>
+      `;
+
+      root.querySelector("#totp-confirm").onsubmit = async (e) => {
+        e.preventDefault();
+        const code = new FormData(e.target).get("code").trim();
+
+        try {
+          const result = await api.post("/api/auth/totp/confirm", { code });
+
+          appState.user.totp_enabled = true;
+
+          message.innerHTML = `
+            <div class="stack">
+              <h4>Autenticación activada</h4>
+              <p class="muted small">
+                Guarda estos códigos de recuperación. Cada uno
+                puede utilizarse una sola vez. No volverán a mostrarse.
+              </p>
+              <div class="panelbox stack">
+                ${result.recovery_codes.map(c => `<code>${esc(c)}</code>`).join("")}
+              </div>
+              <button class="btn ghost" id="totp-copy">Copiar códigos</button>
+              <button class="btn" id="totp-finish">Terminé, guardar y continuar</button>
+            </div>
+          `;
+
+          root.querySelector("#totp-copy").onclick = async () => {
+            try {
+              await navigator.clipboard.writeText(result.recovery_codes.join("\n"));
+              toast("Códigos copiados");
+            } catch {
+              toast("No se pudieron copiar los códigos", true);
+            }
+          };
+
+          root.querySelector("#totp-finish").onclick = () => ctxRefresh();
+
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+
+    } catch (err) {
+      message.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  });
+    root.querySelector("#totp-disable")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const fd = Object.fromEntries(new FormData(e.target));
+
+    try {
+      await api.post("/api/auth/totp/disable", fd);
+
+      appState.user.totp_enabled = false;
+      toast("Autenticación en dos pasos desactivada");
+      ctxRefresh();
+    } catch (err) {
+      root.querySelector("#totp-message").innerHTML =
+        `<p class="error">${esc(err.message)}</p>`;
+    }
+  });
+    root.querySelector("#totp-regenerate")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const fd = Object.fromEntries(new FormData(e.target));
+    const message = root.querySelector("#totp-message");
+
+    if (!confirm("Los códigos anteriores dejarán de funcionar. ¿Deseas generar 10 códigos nuevos?")) {
+      return;
+    }
+
+    try {
+      const result = await api.post("/api/auth/totp/recovery/regenerate", fd);
+
+      message.innerHTML = `
+        <div class="stack">
+          <h4>Nuevos códigos de recuperación</h4>
+          <p class="muted small">
+            Los códigos anteriores ya no funcionan. Guarda estos 10 códigos;
+            cada uno puede utilizarse una sola vez.
+          </p>
+          <div class="panelbox stack">
+            ${result.recovery_codes.map(c => `<code>${esc(c)}</code>`).join("")}
+          </div>
+          <button class="btn ghost" id="totp-copy-new">Copiar códigos</button>
+        </div>
+      `;
+
+      root.querySelector("#totp-copy-new").onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(result.recovery_codes.join("\n"));
+          toast("Códigos copiados");
+        } catch {
+          toast("No se pudieron copiar los códigos", true);
+        }
+      };
+    } catch (err) {
+      message.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  });
   bindCentro(root.querySelector("#f [name=carrera]"), root.querySelector("#centro"), meta);
   wirePw(root);
   root.querySelector("#pw").onsubmit = async (e) => {
