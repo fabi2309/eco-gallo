@@ -58,7 +58,19 @@ export function render(root, { onDone }) {
       email = fd.email.trim().toLowerCase();
       if (!email || !fd.password) return stepPassword("Escribe tu correo y tu contraseña.");
       const btn = e.submitter; btn.disabled = true; btn.textContent = "Entrando…";
-      try { const res = await api.post("/api/auth/login", { email, password: fd.password }); state.user = res.user; onDone(); }
+      try {
+  const res = await api.post("/api/auth/login", {
+    email,
+    password: fd.password
+  });
+
+  if (res.needs_totp) {
+    return stepTotp(res.challenge_token);
+  }
+
+  state.user = res.user;
+  onDone();
+}
       catch (err) {
         if (err.data?.needs_email_verification) return sendCode(err.message);
         stepPassword(err.message);
@@ -69,6 +81,81 @@ export function render(root, { onDone }) {
     box().querySelector("#newalumni").onclick = () => stepAlumni();
   }
 
+  function stepTotp(challengeToken, msg = "") {
+    box().innerHTML = `
+      <h2>Verificación en dos pasos</h2>
+      <p class="muted">
+        Introduce el código de tu aplicación autenticadora
+        o uno de tus códigos de recuperación.
+      </p>
+
+      <form id="f" class="stack" novalidate>
+        <label class="field">
+          Código de autenticación
+          <input
+            class="input"
+            name="code"
+            type="text"
+            autocomplete="one-time-code"
+            placeholder="Código de 6 o 12 caracteres"
+            maxlength="12"
+            required
+          >
+        </label>
+
+        ${errBox(msg)}
+
+        <button class="btn block" id="go">
+          Verificar
+        </button>
+      </form>
+
+      <button class="btn ghost sm" id="back">
+        Volver al inicio de sesión
+      </button>
+    `;
+
+    const form = box().querySelector("#f");
+    const input = form.querySelector('[name="code"]');
+    const go = form.querySelector("#go");
+
+    input.focus();
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+
+      const code = input.value.trim().toUpperCase().replace(/\s/g, "");
+
+      if (!/^(\d{6}|[A-F0-9]{12})$/.test(code)) {
+        return stepTotp(
+          challengeToken,
+          "Introduce un código de 6 dígitos o uno de recuperación válido."
+        );
+      }
+
+      go.disabled = true;
+      go.textContent = "Verificando…";
+
+      try {
+        const res = await api.post("/api/auth/totp/verify", {
+          challenge_token: challengeToken,
+          code
+        });
+
+        state.user = res.user;
+
+        if (res.needs_profile) {
+          renderProfile(root, { onDone });
+        } else {
+          onDone();
+        }
+      } catch (err) {
+        stepTotp(challengeToken, err.message);
+      }
+    };
+
+    box().querySelector("#back").onclick = () => stepPassword();
+  }
   // ------------------------------------------------------------ código por correo
   function stepEmail(msg = "", creating = false) {
     box().innerHTML = `
@@ -140,11 +227,27 @@ export function render(root, { onDone }) {
       if (value().length !== 6) return;
       go.disabled = true; go.textContent = "Verificando…";
       try {
-        const res = await api.post("/api/auth/verify", { email, code: value() });
-        clearInterval(timer);
-        state.user = res.user;
-        if (res.needs_profile) renderProfile(root, { onDone }); else onDone();
-      } catch (err) { stepCode({ ...r, cooldown }, err.message); }
+        const res = await api.post("/api/auth/verify", {
+  email,
+  code: value()
+});
+
+clearInterval(timer);
+
+if (res.needs_totp) {
+  return stepTotp(res.challenge_token);
+}
+
+state.user = res.user;
+
+if (res.needs_profile) {
+  renderProfile(root, { onDone });
+} else {
+  onDone();
+}
+      } catch (err) {
+        stepCode({ ...r, cooldown }, err.message);
+      }
     };
     const resend = box().querySelector("#resend");
     const tick = () => {
