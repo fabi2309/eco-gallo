@@ -3,10 +3,13 @@ import { esc, icon, money, timeAgo, ask, toast } from "../ui.js";
 
 export async function render(root, { state, refresh, go }) {
   if (state.user.role !== "admin") return go("#/");
-  const [d, bks] = await Promise.all([
+  
+  const [d, bks, metrics] = await Promise.all([
     api.get("/api/admin/overview"),
     api.get("/api/admin/backups").catch(() => ({ ok: false, backups: [], config: {} })),
+    api.get("/api/admin/metrics").catch(() => ({ ok: false, users_monthly: [], posts_category: [], transactions: [] })),
   ]);
+  
   const s = d.stats;
   root.innerHTML = `
   <div class="stack">
@@ -17,6 +20,26 @@ export async function render(root, { state, refresh, go }) {
       <div class="kpi"><div class="n">${d.reports.length}</div><div class="muted small">Reportes sin revisar</div></div>
       <div class="kpi"><div class="n">${s.users}</div><div class="muted small">Usuarios</div></div>
     </div>
+
+    <!-- Módulo de Gráficas (Dashboard Centeno) -->
+    <div class="panelbox stack">
+      <h2>Métricas y Estadísticas del Sistema</h2>
+      <div class="row wrap" style="gap:20px; align-items: flex-start;">
+        <div style="flex:1; min-width:280px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
+          <h3 class="small muted" style="margin-bottom:10px">Usuarios Registrados por Mes</h3>
+          <canvas id="chartUsers" height="180"></canvas>
+        </div>
+        <div style="flex:1; min-width:280px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
+          <h3 class="small muted" style="margin-bottom:10px">Publicaciones por Categoría</h3>
+          <canvas id="chartCategories" height="180"></canvas>
+        </div>
+      </div>
+      <div style="margin-top:15px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
+        <h3 class="small muted" style="margin-bottom:10px">Transacciones / Órdenes Realizadas</h3>
+        <canvas id="chartTransactions" height="120"></canvas>
+      </div>
+    </div>
+
     <div class="panelbox stack"><h2>Egresados por verificar ${d.verifications.length ? `<span class="badge inline">${d.verifications.length}</span>` : ""}</h2>
       <p class="muted small">Compara el nombre y la carrera con el documento. Al resolver, el archivo se borra.</p>
       ${d.verifications.length ? d.verifications.map((v) => `<div class="item verif" data-v="${v.id}"><div class="grow stack" style="gap:6px">
@@ -69,6 +92,42 @@ export async function render(root, { state, refresh, go }) {
       ` : '<p class="muted">No hay respaldos registrados todavía.</p>'}
     </div>
   </div>`;
+
+  // Inicializar Gráficas con Chart.js si la librería está cargada
+  if (typeof Chart !== "undefined") {
+    const uM = metrics.users_monthly || [];
+    const pC = metrics.posts_category || [];
+    const txM = metrics.transactions || [];
+
+    new Chart(root.querySelector("#chartUsers"), {
+      type: 'line',
+      data: {
+        labels: uM.map(x => x.month || "Actual"),
+        datasets: [{ label: 'Usuarios', data: uM.map(x => x.count), borderColor: '#1d5c3a', backgroundColor: 'rgba(29, 92, 58, 0.1)', fill: true, tension: 0.3 }]
+      },
+      options: { responsive: true, plugins: { legend: { display: false } } }
+    });
+
+    new Chart(root.querySelector("#chartCategories"), {
+      type: 'doughnut',
+      data: {
+        labels: pC.map(x => x.category || "General"),
+        datasets: [{ data: pC.map(x => x.count), backgroundColor: ['#1d5c3a', '#2a8050', '#48b875', '#a3e6b5', '#888'] }]
+      },
+      options: { responsive: true }
+    });
+
+    new Chart(root.querySelector("#chartTransactions"), {
+      type: 'bar',
+      data: {
+        labels: txM.map(x => x.month || "Sin datos"),
+        datasets: [{ label: 'Órdenes', data: txM.map(x => x.count), backgroundColor: '#1d5c3a' }]
+      },
+      options: { responsive: true }
+    });
+  }
+
+  // Event Listeners existentes
   root.querySelectorAll("[data-ok]").forEach((b) => (b.onclick = async () => {
     if (!(await ask({ title: "¿Aprobar este egresado?", text: "Confirma que el documento es legible y coincide con su nombre y carrera.", confirm: "Aprobar" }))) return;
     try { await api.post(`/api/admin/verifications/${b.dataset.ok}/review`, { action: "approve" }); toast("Egresado verificado"); refresh(); } catch (e) { toast(e.message, true); }

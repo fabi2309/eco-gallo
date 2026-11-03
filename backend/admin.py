@@ -222,3 +222,31 @@ def upload_backup_file():
         return api_error("Error interno al procesar el archivo subido.", 500)
 
     return jsonify({"ok": True, "backup": info, "message": "Respaldo subido y verificado exitosamente."})
+
+
+@bp.get("/metrics")
+@admin_required
+def admin_metrics():
+    db = get_db()
+    
+    # 1. Usuarios registrados por mes
+    users_by_month = db.execute(
+        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count FROM users GROUP BY month ORDER BY month ASC"
+    ).fetchall()
+    
+    # 2. Publicaciones por categoría
+    posts_by_category = db.execute(
+        "SELECT category, COUNT(*) as count FROM posts GROUP BY category"
+    ).fetchall()
+    
+    # 3. Transacciones / Órdenes por mes
+    transactions = db.execute(
+        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count, SUM(amount_cents) as total FROM orders GROUP BY month ORDER BY month ASC"
+    ).fetchall()
+
+    return jsonify({
+        "ok": True,
+        "users_monthly": [{"month": r["month"], "count": r["count"]} for r in users_by_month],
+        "posts_category": [{"category": r["category"], "count": r["count"]} for r in posts_by_category],
+        "transactions": [{"month": r["month"], "count": r["count"], "total": r["total"]} for r in transactions]
+    })
