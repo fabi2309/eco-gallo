@@ -1,6 +1,7 @@
 """Publicaciones, búsqueda y subida de imágenes."""
 import re
 import uuid
+import difflib
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, g, jsonify, request
@@ -124,6 +125,62 @@ def meta():
         "conditions": config.CONDITIONS, "meeting_points": config.SAFE_MEETING_POINTS,
         "max_images": config.MAX_IMAGES, "max_price_cents": config.MAX_PRICE_CENTS,
     })
+
+
+# Diccionario de sinónimos locales para la comunidad UAA
+SYNONYMS = {
+    'libro': ['texto', 'guia', 'antologia', 'manual'],
+    'bici': ['bicicleta', 'cicla', 'transporte'],
+    'compu': ['laptop', 'computadora', 'pc', 'portatil'],
+    'calculadora': ['casio', 'cientifica'],
+    'bata': ['laboratorio', 'quimica', 'medicina']
+}
+
+def expand_query(term):
+    """Expande el término de búsqueda usando el diccionario de sinónimos"""
+    term_lower = term.lower().strip()
+    expanded = [term_lower]
+    for key, synonyms in SYNONYMS.items():
+        if term_lower == key or term_lower in synonyms:
+            expanded.append(key)
+            expanded.extend(synonyms)
+    return list(set(expanded))
+
+
+@bp.get("/search/smart")
+@login_required
+def smart_search():
+    """Buscador inteligente con sinónimos y tolerancia a errores (fuzzy search)."""
+    db = get_db()
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify([])
+
+    # 1. Obtener todas las publicaciones activas
+    posts_cursor = db.execute(f"{BASE_SELECT} WHERE p.status IN ('active','reserved')")
+    posts = rows(posts_cursor)
+    
+    search_terms = expand_query(query)
+    matched_products = set()
+
+    all_titles = [p['title'] for p in posts]
+
+    for term in search_terms:
+        # Tolerancia a errores de escritura con difflib (cutoff=0.3 permite errores tipográficos)
+        close_titles = difflib.get_close_matches(term, all_titles, n=5, cutoff=0.3)
+        
+        for p in posts:
+            if any(t in p['title'].lower() for t in search_terms) or \
+               any(t in p['description'].lower() for t in search_terms) or \
+               p['title'] in close_titles:
+                matched_products.add(p["id"])
+
+    # Filtrar las publicaciones que coincidieron preservando el orden y formato
+    filtered_posts = [p for p in posts if p["id"] in matched_products]
+    imgs = images_for(db, [p["id"] for p in filtered_posts])
+    
+    out_posts = [serialize(p, imgs[p["id"]]) for p in filtered_posts[:10]]
+    return jsonify(out_posts)
 
 
 @bp.get("/posts")
