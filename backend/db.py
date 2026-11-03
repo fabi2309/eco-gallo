@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS posts(
   price_cents INTEGER NOT NULL DEFAULT 0,
   condition TEXT NOT NULL DEFAULT 'Usado',
   status TEXT NOT NULL DEFAULT 'active',       -- active | paused | reserved | sold | removed
+  views_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_posts_status ON posts(status, created_at);
@@ -158,6 +159,17 @@ CREATE TABLE IF NOT EXISTS wishlist(
 );
 CREATE INDEX IF NOT EXISTS ix_wishlist_user ON wishlist(user_id);
 
+-- Artículos guardados / favoritos (seguimiento de interés y alertas de precio)
+CREATE TABLE IF NOT EXISTS favorites(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, post_id)
+);
+CREATE INDEX IF NOT EXISTS ix_fav_user ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS ix_fav_post ON favorites(post_id);
+
 CREATE TABLE IF NOT EXISTS reports(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_id INTEGER NOT NULL REFERENCES users(id),
@@ -223,6 +235,9 @@ def init_db():
     for col, ddl in _USER_MIGRATIONS.items():
         if col not in have:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+    have_posts = {r["name"] for r in con.execute("PRAGMA table_info(posts)")}
+    if "views_count" not in have_posts:
+        con.execute("ALTER TABLE posts ADD COLUMN views_count INTEGER NOT NULL DEFAULT 0")
     for old, new in _CENTRO_RENAMES.items():
         con.execute("UPDATE posts SET centro=? WHERE centro=?", (new, old))
         con.execute("UPDATE users SET centro=? WHERE centro=?", (new, old))

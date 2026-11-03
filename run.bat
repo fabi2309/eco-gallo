@@ -3,6 +3,7 @@ REM ECO-GALLO UAA - arranca backend (Python/Flask) + gateway (Java)
 cd /d "%~dp0"
 if "%ECOGALLO_SEED%"=="" set ECOGALLO_SEED=1
 if "%ECOGALLO_SMTP_HOST%"=="" if "%ECOGALLO_DEV%"=="" set ECOGALLO_DEV=1
+if "%ECOGALLO_ADMINS%"=="" set ECOGALLO_ADMINS=admin@edu.uaa.mx
 if "%PORT%"=="" set PORT=8080
 python -m pip install -q -r backend\requirements.txt
 if not exist gateway\out mkdir gateway\out

@@ -9,12 +9,21 @@ Marketplace universitario de economía circular (tesina ECO-GALLO). **Sin Angula
 | Backend | **Python / Flask** + SQLite — `backend/` |
 
 ## Arrancar
+### Opción 1: Con Gateway oficial (Java + Python)
 Requisitos: Python 3.10+, Java 17+ (probado con 21).
 
 ```bash
 ./run.sh          # Linux / macOS      (Windows: run.bat)
 # abre http://localhost:8080
 ```
+### Opción 2: Desarrollo rápido (100% Python, sin necesidad de Java)
+Si no tienes Java JDK instalado, puedes iniciar la aplicación completa directamente con Python:
+```bash
+pip install -r backend/requirements.txt
+python run_dev.py     # En Windows también puedes usar: run_dev.bat
+# abre http://localhost:8080
+```
+
 Sin SMTP configurado, el código de acceso se imprime en la consola y se muestra en pantalla
 (`ECOGALLO_DEV=1`, solo desarrollo). Se cargan 8 publicaciones de demostración (`ECOGALLO_SEED=1`).
 
@@ -56,7 +65,7 @@ Autenticación (código, contraseña, egresados verificados) · Publicaciones (h
 Búsqueda y filtros (texto, categoría, tipo, centro, **estado del producto y rango de precio**) con **búsquedas recientes** ·
 **Lista de deseos** (aviso en la campana cuando alguien publica algo que coincide; se revisa cada 30 s) ·
 Perfil con **foto y biografía** · **Modo oscuro** · Mensajería por publicación
-con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Panel de administración (disputas, reportes, usuarios) ·
+con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Panel de administración (disputas, reportes, usuarios, respaldos del sistema) ·
 Dashboard de impacto (CO₂e estimado por categoría).
 
 ## Pruebas
@@ -64,10 +73,12 @@ Arranca con `ECOGALLO_ADMINS=admin@edu.uaa.mx ./run.sh` y luego `python3 tests/e
 
 ## Estructura
 ```
-backend/   app.py config.py db.py security.py auth.py posts.py orders.py payments.py social.py admin.py seed.py
+backend/   app.py config.py db.py security.py auth.py posts.py orders.py payments.py social.py admin.py seed.py backups.py
 gateway/   Gateway.java
 frontend/  index.html css/app.css js/{main,api,ui}.js js/views/*.js
 data/      (se crea sola) base SQLite, fotos subidas y clave secreta
+run_dev.py / run_dev.bat   servidor local de desarrollo en Python (sin necesidad de Java)
+.env.example               plantilla con variables de entorno soportadas
 ```
 ## Centros y carreras
 `backend/catalog.py` es la única fuente (registro, perfil, filtros, publicaciones). El centro del usuario se deduce de su carrera.

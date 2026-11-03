@@ -25,10 +25,8 @@ def move(db, order_id: int, allowed: tuple, to: str, **extra) -> dict:
     """Transición atómica de estado; falla si otro proceso ya la cambió."""
     sets = ["status=?", "updated_at=?"] + [f"{k}=?" for k in extra]
     q = ",".join("?" * len(allowed))
-    cur = db.execute(
-        f"UPDATE orders SET {','.join(sets)} WHERE id=? AND status IN ({q})",
-        (to, now(), *extra.values(), order_id, *allowed),
-    )
+    query = f"UPDATE orders SET {','.join(sets)} WHERE id=? AND status IN ({q})"
+    cur = db.execute(query, (to, now(), *extra.values(), order_id, *allowed))  # nosec B608
     if cur.rowcount != 1:
         raise Conflict("El estado de la orden cambió. Actualiza la página.")
     return dict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
@@ -242,12 +240,12 @@ def wallet():
         "SELECT COALESCE(SUM(amount_cents),0) s FROM wallet_entries WHERE user_id=?", (uid,)
     ).fetchone()["s"]
     pending = db.execute(
-        f"""SELECT COALESCE(SUM(amount_cents),0) s FROM orders
-            WHERE seller_id=? AND status IN ({','.join('?' * len(LIVE))})""", (uid, *LIVE)
+        """SELECT COALESCE(SUM(amount_cents),0) s FROM orders
+           WHERE seller_id=? AND status IN ('HELD','DELIVERED','DISPUTED')""", (uid,)
     ).fetchone()["s"]
     held_buyer = db.execute(
-        f"""SELECT COALESCE(SUM(amount_cents),0) s FROM orders
-            WHERE buyer_id=? AND status IN ({','.join('?' * len(LIVE))})""", (uid, *LIVE)
+        """SELECT COALESCE(SUM(amount_cents),0) s FROM orders
+           WHERE buyer_id=? AND status IN ('HELD','DELIVERED','DISPUTED')""", (uid,)
     ).fetchone()["s"]
     return jsonify({"ok": True, "available_cents": released, "pending_cents": pending,
                     "buyer_held_cents": held_buyer})

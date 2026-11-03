@@ -3,7 +3,10 @@ import { esc, icon, money, timeAgo, ask, toast } from "../ui.js";
 
 export async function render(root, { state, refresh, go }) {
   if (state.user.role !== "admin") return go("#/");
-  const d = await api.get("/api/admin/overview");
+  const [d, bks] = await Promise.all([
+    api.get("/api/admin/overview"),
+    api.get("/api/admin/backups").catch(() => ({ ok: false, backups: [], config: {} })),
+  ]);
   const s = d.stats;
   root.innerHTML = `
   <div class="stack">
@@ -35,6 +38,36 @@ export async function render(root, { state, refresh, go }) {
     <div class="panelbox stack"><h2>Usuarios</h2><div class="list">
       ${d.users.map((u) => `<div class="item"><div class="grow"><div class="t">${esc(u.name || "(sin nombre)")} ${u.role === "admin" ? "· admin" : ""}${u.kind === "egresado" ? ` · egresado (${u.verif_status === "approved" ? "verificado" : u.verif_status === "rejected" ? "rechazado" : "pendiente"})` : ""}</div><div class="muted small">${esc(u.email)}</div></div>
         ${u.role === "admin" || u.id === state.user.id ? "" : `<button class="btn sm ${u.suspended ? "" : "ghost"}" data-u="${u.id}" data-s="${u.suspended ? 0 : 1}">${u.suspended ? "Reactivar" : "Suspender"}</button>`}</div>`).join("")}</div></div>
+    <div class="panelbox stack">
+      <div class="row wrap between" style="align-items:center">
+        <h2>Respaldos del Sistema ${bks.backups?.length ? `<span class="badge inline">${bks.backups.length}</span>` : ""}</h2>
+        <div class="row wrap" style="gap:8px">
+          <label class="btn sm ghost" style="cursor:pointer;margin:0" title="Subir un archivo .zip de respaldo">+ Subir .zip<input type="file" id="input-upload-backup" accept=".zip" hidden></label>
+          <button class="btn sm green" id="btn-create-backup">+ Crear respaldo ahora</button>
+        </div>
+      </div>
+      <p class="muted small">
+        Respaldos periódicos: ${bks.config?.enabled ? `Activo (cada ${bks.config.interval_hours} horas, retiene ${bks.config.keep} copias)` : "Desactivado"}.
+        Empaqueta la base de datos SQLite y todas las fotografías/documentos en un archivo .zip descargable. Al restaurar, se crea automáticamente una copia preventiva del estado actual.
+      </p>
+      ${bks.backups && bks.backups.length ? `
+        <div class="list">
+          ${bks.backups.map((b) => `
+            <div class="item" style="align-items:center">
+              <div class="grow stack" style="gap:4px">
+                <div class="t">${esc(b.filename)} <span class="badge inline small">${b.tag === "auto" ? "Automático" : b.tag === "pre_restore" ? "Preventivo" : b.tag === "subido" ? "Subido" : "Manual"}</span></div>
+                <div class="muted small">Tamaño: ${esc(b.human_size)} · ${b.uploads_count} fotos · creado ${timeAgo(b.created_timestamp)}</div>
+              </div>
+              <div class="row wrap" style="gap:8px">
+                <button class="btn sm ghost" data-restore-backup="${esc(b.filename)}" title="Restaurar el sistema a este punto">Restaurar</button>
+                <a class="btn sm ghost" href="/api/admin/backups/${encodeURIComponent(b.filename)}/download" download>Descargar .zip</a>
+                <button class="btn sm danger ghost" data-del-backup="${esc(b.filename)}">Eliminar</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : '<p class="muted">No hay respaldos registrados todavía.</p>'}
+    </div>
   </div>`;
   root.querySelectorAll("[data-ok]").forEach((b) => (b.onclick = async () => {
     if (!(await ask({ title: "¿Aprobar este egresado?", text: "Confirma que el documento es legible y coincide con su nombre y carrera.", confirm: "Aprobar" }))) return;
@@ -52,4 +85,76 @@ export async function render(root, { state, refresh, go }) {
   root.querySelectorAll("[data-u]").forEach((b) => (b.onclick = async () => {
     try { await api.post(`/api/admin/users/${b.dataset.u}/suspend`, { suspended: b.dataset.s === "1" }); toast("Listo"); refresh(); } catch (e) { toast(e.message, true); }
   }));
+
+  const btnCreate = root.querySelector("#btn-create-backup");
+  if (btnCreate) {
+    btnCreate.onclick = async () => {
+      btnCreate.disabled = true;
+      btnCreate.textContent = "Generando respaldo...";
+      try {
+        await api.post("/api/admin/backups", { tag: "manual" });
+        toast("Respaldo generado con éxito");
+        refresh();
+      } catch (e) {
+        toast(e.message, true);
+        btnCreate.disabled = false;
+        btnCreate.textContent = "+ Crear respaldo ahora";
+      }
+    };
+  }
+
+  root.querySelectorAll("[data-del-backup]").forEach((btn) => (btn.onclick = async () => {
+    const fn = btn.dataset.delBackup;
+    if (!(await ask({ title: "¿Eliminar respaldo?", text: `¿Deseas eliminar el archivo ${fn}?`, confirm: "Eliminar", danger: true }))) return;
+    try {
+      await api.del(`/api/admin/backups/${encodeURIComponent(fn)}`);
+      toast("Respaldo eliminado");
+      refresh();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }));
+
+  root.querySelectorAll("[data-restore-backup]").forEach((btn) => (btn.onclick = async () => {
+    const fn = btn.dataset.restoreBackup;
+    const ok = await ask({
+      title: "¿Restaurar este respaldo?",
+      text: `Se reemplazará la base de datos y archivos multimedia con los del respaldo «${fn}». Se creará automáticamente una copia preventiva antes de proceder.`,
+      confirm: "Sí, restaurar ahora",
+      danger: true,
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    btn.textContent = "Restaurando...";
+    try {
+      const res = await api.post(`/api/admin/backups/${encodeURIComponent(fn)}/restore`);
+      toast(res.message || "Respaldo restaurado exitosamente");
+      setTimeout(() => refresh(), 800);
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+      btn.textContent = "Restaurar";
+    }
+  }));
+
+  const inputUpload = root.querySelector("#input-upload-backup");
+  if (inputUpload) {
+    inputUpload.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        return toast("Solo se admiten archivos .zip de respaldo", true);
+      }
+      const fd = new FormData();
+      fd.append("backup_file", file);
+      toast("Subiendo y validando respaldo...");
+      try {
+        await api.form("POST", "/api/admin/backups/upload", fd);
+        toast("Respaldo subido exitosamente");
+        refresh();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
 }

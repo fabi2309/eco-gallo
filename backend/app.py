@@ -29,6 +29,9 @@ def create_app() -> Flask:
     for bp in (auth_bp, posts_bp, orders_bp, social_bp, wishlist_bp, admin_bp):
         app.register_blueprint(bp)
 
+    from backups import start_backup_scheduler
+    start_backup_scheduler()
+
     app.before_request(load_user)
     app.teardown_appcontext(dbmod.close_db)
 
