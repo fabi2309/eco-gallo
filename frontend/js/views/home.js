@@ -85,19 +85,26 @@ export async function render(root, { state }) {
     });
   };
 
-  // Contenedor flotante para las sugerencias del buscador inteligente
+// 1. Envolver el input #q en un contenedor relativo exclusivo
   const qInput = root.querySelector("#q");
-  qInput.parentNode.style.position = "relative";
-  
+  if (qInput && !qInput.parentNode.classList.contains("q-wrapper")) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "q-wrapper";
+    wrapper.style.cssText = "position: relative; width: 100%; grid-column: 1 / -1;";
+    qInput.parentNode.insertBefore(wrapper, qInput);
+    wrapper.appendChild(qInput);
+  }
+
+  // 2. Crear la lista flotante ocultándola por defecto (display: none)
   let suggestionsBox = root.querySelector("#smart-suggestions");
   if (!suggestionsBox) {
     suggestionsBox = document.createElement("ul");
     suggestionsBox.id = "smart-suggestions";
-    suggestionsBox.style.cssText = "position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-card); border: 1px solid var(--border); list-style: none; padding: 0; margin: 0; z-index: 1000; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-height: 250px; overflow-y: auto;";
+    suggestionsBox.style.cssText = "position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-card, #fff); border: 1px solid var(--border, #ccc); list-style: none; padding: 4px 0; margin: 0; z-index: 9999; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); max-height: 250px; overflow-y: auto; display: none;";
     qInput.parentNode.appendChild(suggestionsBox);
   }
 
-  // Evento de búsqueda en tiempo real con sugerencias y filtros
+  // 3. Controlar la visibilidad al escribir
   qInput.oninput = (e) => {
     f.q = e.target.value; 
     clearTimeout(t); 
@@ -105,16 +112,18 @@ export async function render(root, { state }) {
     const query = f.q.trim();
     if (query.length < 2) {
       suggestionsBox.innerHTML = "";
+      suggestionsBox.style.display = "none";
       t = setTimeout(load, 250);
       return;
     }
 
     t = setTimeout(async () => {
-      load(); // Actualiza los productos principales
+      load();
       try {
         const res = await api.get(`/api/search/smart?q=${encodeURIComponent(query)}`);
         if (!res || !res.length) {
           suggestionsBox.innerHTML = `<li style="padding: 10px; color: var(--muted); font-size: 0.85rem;">Sin sugerencias directas</li>`;
+          suggestionsBox.style.display = "block";
           return;
         }
         suggestionsBox.innerHTML = res.map(p => `
@@ -123,11 +132,13 @@ export async function render(root, { state }) {
             <span style="float: right; color: var(--green); font-weight: bold;">${p.price_cents ? '$' + (p.price_cents/100).toFixed(2) : 'Intercambio/Gratis'}</span>
           </li>
         `).join("");
+        suggestionsBox.style.display = "block";
 
         suggestionsBox.querySelectorAll("li[data-id]").forEach(li => {
           li.onclick = () => {
             window.location.hash = `#/post/${li.dataset.id}`;
             suggestionsBox.innerHTML = "";
+            suggestionsBox.style.display = "none";
           };
         });
       } catch (err) {
@@ -136,10 +147,11 @@ export async function render(root, { state }) {
     }, 250);
   };
 
-  // Ocultar la caja de sugerencias si hace clic en cualquier otro lado
+  // Ocultar si hace clic fuera
   document.addEventListener("click", (evt) => {
     if (!qInput.contains(evt.target) && !suggestionsBox.contains(evt.target)) {
       suggestionsBox.innerHTML = "";
+      suggestionsBox.style.display = "none";
     }
   });
 

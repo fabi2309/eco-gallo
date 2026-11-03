@@ -4,10 +4,11 @@ import { esc, icon, money, timeAgo, ask, toast } from "../ui.js";
 export async function render(root, { state, refresh, go }) {
   if (state.user.role !== "admin") return go("#/");
   
-  const [d, bks, metrics] = await Promise.all([
+  const [d, bks, metrics, pending] = await Promise.all([
     api.get("/api/admin/overview"),
     api.get("/api/admin/backups").catch(() => ({ ok: false, backups: [], config: {} })),
     api.get("/api/admin/metrics").catch(() => ({ ok: false, users_monthly: [], posts_category: [], transactions: [] })),
+    api.get("/api/admin/posts/pending").catch(() => ({ ok: false, posts: [] })),
   ]);
   
   const s = d.stats;
@@ -38,6 +39,24 @@ export async function render(root, { state, refresh, go }) {
         <h3 class="small muted" style="margin-bottom:10px">Transacciones / Órdenes Realizadas</h3>
         <canvas id="chartTransactions" height="120"></canvas>
       </div>
+    </div>
+
+    <div class="panelbox stack">
+      <h2>Publicaciones pendientes de moderación ${pending.posts?.length ? `<span class="badge inline">${pending.posts.length}</span>` : ""}</h2>
+      <p class="muted small">Revisa y autoriza las nuevas publicaciones antes de que sean visibles en el catálogo general.</p>
+      ${pending.posts && pending.posts.length ? pending.posts.map((p) => `
+        <div class="item" style="align-items: flex-start;">
+          <div class="grow stack" style="gap:4px">
+            <div class="t"><strong>${esc(p.title)}</strong> · <span class="muted small">${esc(p.category)} · ${p.price_cents ? money(p.price_cents) : p.tipo}</span></div>
+            <div class="small">${esc(p.description)}</div>
+            <div class="muted small">Publicado por ${esc(p.author.name)} (${esc(p.author.centro)}) · ${timeAgo(p.created_at)}</div>
+          </div>
+          <div class="row wrap" style="gap:8px">
+            <button class="btn sm green" data-mod-post="${p.id}" data-mod-act="approve">Aprobar</button>
+            <button class="btn sm danger" data-mod-post="${p.id}" data-mod-act="reject">Rechazar</button>
+          </div>
+        </div>
+      `).join("") : '<p class="muted">No hay publicaciones pendientes de revisión.</p>'}
     </div>
 
     <div class="panelbox stack"><h2>Egresados por verificar ${d.verifications.length ? `<span class="badge inline">${d.verifications.length}</span>` : ""}</h2>
@@ -144,6 +163,21 @@ export async function render(root, { state, refresh, go }) {
   root.querySelectorAll("[data-u]").forEach((b) => (b.onclick = async () => {
     try { await api.post(`/api/admin/users/${b.dataset.u}/suspend`, { suspended: b.dataset.s === "1" }); toast("Listo"); refresh(); } catch (e) { toast(e.message, true); }
   }));
+  root.querySelectorAll("[data-mod-post]").forEach((btn) => {
+    btn.onclick = async () => {
+      const pid = btn.dataset.modPost;
+      const act = btn.dataset.modAct;
+      const confirmText = act === "approve" ? "¿Aprobar esta publicación?" : "¿Rechazar esta publicación?";
+      if (!(await ask({ title: confirmText, confirm: act === "approve" ? "Aprobar" : "Rechazar", danger: act === "reject" }))) return;
+      try {
+        await api.post(`/api/admin/posts/${pid}/moderate`, { action: act });
+        toast(act === "approve" ? "Publicación aprobada" : "Publicación rechazada");
+        refresh();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  });
 
   const btnCreate = root.querySelector("#btn-create-backup");
   if (btnCreate) {

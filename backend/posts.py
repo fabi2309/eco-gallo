@@ -313,9 +313,9 @@ def create_post():
     with tx(db):
         cur = db.execute(
             """INSERT INTO posts(author_id,title,description,category,centro,tipo,price_cents,
-                                 condition,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                                 condition,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (g.user["id"], fields["title"], fields["description"], fields["category"],
-             fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], now()),
+             fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], "pending", now()),
         )
         pid = cur.lastrowid
         for i, name in enumerate(saved):
