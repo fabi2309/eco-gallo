@@ -49,6 +49,28 @@ CREATE TABLE IF NOT EXISTS sessions(
   expires_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS auth_challenges(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_auth_challenges_user
+  ON auth_challenges(user_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS totp_recovery_codes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_totp_recovery_user
+  ON totp_recovery_codes(user_id, used);
+
 CREATE TABLE IF NOT EXISTS posts(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   author_id INTEGER NOT NULL REFERENCES users(id),
@@ -211,6 +233,11 @@ _USER_MIGRATIONS = {
     "verif_status": "TEXT NOT NULL DEFAULT 'approved'",
     "bio": "TEXT NOT NULL DEFAULT ''",
     "avatar": "TEXT NOT NULL DEFAULT ''",
+    "totp_enabled": "INTEGER NOT NULL DEFAULT 0",
+    "totp_secret": "TEXT NOT NULL DEFAULT ''",
+    "totp_pending_secret": "TEXT NOT NULL DEFAULT ''",
+    "totp_pending_expires_at": "INTEGER NOT NULL DEFAULT 0",
+    "totp_last_counter": "INTEGER NOT NULL DEFAULT -1",
 }
 
 

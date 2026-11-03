@@ -24,6 +24,12 @@ from security import (  # noqa: E402
     normalize_email,
     password_problem,
     sniff_document,
+    decrypt_totp_secret,
+    encrypt_totp_secret,
+    new_totp_secret,
+    totp_provisioning_uri,
+    verify_totp,
+    verify_totp_counter,
 )
 
 
@@ -226,3 +232,56 @@ class TestWishlistAndStats:
         assert "$350.00" in rows[0]["text"]
         assert "$500.00" in rows[0]["text"]
         assert "link" in rows[0].keys() and rows[0]["link"] == "#/post/10"
+
+
+class TestTwoFactorAuthentication:
+
+    def test_totp_secret_generation(self):
+        secret = new_totp_secret()
+
+        assert isinstance(secret, str)
+        assert len(secret) == 32
+        assert secret.isalnum()
+
+    def test_totp_secret_encryption_roundtrip(self):
+        secret = new_totp_secret()
+
+        encrypted = encrypt_totp_secret(secret)
+        decrypted = decrypt_totp_secret(encrypted)
+
+        assert encrypted != secret
+        assert decrypted == secret
+
+    def test_totp_provisioning_uri(self):
+        secret = new_totp_secret()
+
+        uri = totp_provisioning_uri(secret, "usuario@edu.uaa.mx")
+
+        assert uri.startswith("otpauth://totp/")
+        assert "ECO-GALLO" in uri
+        assert "usuario" in uri
+
+    def test_totp_valid_code(self):
+        import pyotp
+
+        secret = new_totp_secret()
+        code = pyotp.TOTP(secret).now()
+
+        assert verify_totp(secret, code) is True
+
+    def test_totp_invalid_code(self):
+        secret = new_totp_secret()
+
+        assert verify_totp(secret, "000000") is False
+
+    def test_totp_replay_protection(self):
+        import pyotp
+
+        secret = new_totp_secret()
+        totp = pyotp.TOTP(secret)
+        counter = int(totp.timecode(__import__("datetime").datetime.now()))
+
+        code = totp.at(counter * totp.interval)
+
+        assert verify_totp_counter(secret, code, last_counter=-1) == counter
+        assert verify_totp_counter(secret, code, last_counter=counter) is None

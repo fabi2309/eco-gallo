@@ -12,10 +12,41 @@ from functools import wraps
 from flask import g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 import config
 from db import get_db, now
 
 log = logging.getLogger("ecogallo")
+
+# ----------------------------------------------------------- cifrado TOTP
+
+
+def _totp_fernet():
+    """Genera una clave de cifrado independiente a partir del secreto principal."""
+    derived_key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"eco-gallo-totp-encryption-v1",
+    ).derive(config.SECRET)
+
+    return Fernet(__import__("base64").urlsafe_b64encode(derived_key))
+
+
+def encrypt_totp_secret(secret: str) -> str:
+    """Cifra un secreto TOTP antes de almacenarlo en SQLite."""
+    fernet = _totp_fernet()
+    return fernet.encrypt(secret.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_totp_secret(encrypted_secret: str) -> str:
+    """Descifra un secreto TOTP almacenado en SQLite."""
+    fernet = _totp_fernet()
+    return fernet.decrypt(encrypted_secret.encode("utf-8")).decode("utf-8")
+
 
 EMAIL_RE = re.compile(
     r"^[a-z0-9][a-z0-9._%+\-]{0,63}@[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?"
@@ -95,8 +126,54 @@ def hash_token(token: str) -> str:
     return _hmac(f"session:{token}")
 
 
+def hash_challenge(token: str) -> str:
+    return _hmac(f"totp-challenge:{token}")
+
+
 def new_code() -> str:
     return f"{secrets.randbelow(10 ** 6):06d}"
+
+# ----------------------------------------------------------- autenticacion TOTP
+
+
+def new_totp_secret() -> str:
+    """Genera un secreto aleatorio para una aplicación autenticadora."""
+    import pyotp
+    return pyotp.random_base32()
+
+
+def totp_provisioning_uri(secret: str, email: str) -> str:
+    """Genera el enlace para registrar la cuenta en una app autenticadora."""
+    import pyotp
+    return pyotp.TOTP(secret).provisioning_uri(
+        name=email,
+        issuer_name="ECO-GALLO",
+    )
+
+
+def verify_totp_counter(secret: str, code: str, last_counter: int = -1):
+    """Valida TOTP y devuelve el contador, evitando reutilizar códigos."""
+    import pyotp
+
+    if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
+        return None
+
+    totp = pyotp.TOTP(secret)
+    current_counter = int(now() // totp.interval)
+
+    for counter in range(current_counter - 1, current_counter + 2):
+        if counter <= last_counter:
+            continue
+
+        if hmac.compare_digest(totp.at(counter * totp.interval), code):
+            return counter
+
+    return None
+
+
+def verify_totp(secret: str, code: str) -> bool:
+    """Valida un código TOTP sin gestionar todavía su consumo."""
+    return verify_totp_counter(secret, code) is not None
 
 
 def client_ip() -> str:
