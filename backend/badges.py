@@ -24,5 +24,5 @@ def compute(row) -> dict:
 
 
 def user_badges(db, user_id: int) -> dict:
-    row = db.execute(f"SELECT {BADGE_COLS} FROM users u WHERE u.id=?", (user_id,)).fetchone()
+    row = db.execute(f"SELECT {BADGE_COLS} FROM users u WHERE u.id=?", (user_id,)).fetchone()  # nosec B608 - BADGE_COLS es constante
     return compute(row) if row else {"egresado": False, "seller": False, "deals": 0}

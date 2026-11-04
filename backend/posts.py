@@ -104,7 +104,7 @@ def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
 BASE_SELECT = f"""SELECT p.*, u.name AS author_name, u.carrera AS author_carrera,
                         u.centro AS author_centro, u.bio AS author_bio, u.avatar AS author_avatar,
                         {BADGE_COLS}
-                 FROM posts p JOIN users u ON u.id = p.author_id"""
+                 FROM posts p JOIN users u ON u.id = p.author_id"""  # nosec B608 - BADGE_COLS es constante
 
 
 def images_for(db, ids: list[int]) -> dict[int, list[str]]:
@@ -112,8 +112,8 @@ def images_for(db, ids: list[int]) -> dict[int, list[str]]:
     if not ids:
         return out
     q = ",".join("?" * len(ids))
-    query = f"SELECT post_id, filename FROM post_images WHERE post_id IN ({q}) ORDER BY position, id"
-    for r in db.execute(query, ids):  # nosec B608
+    query = f"SELECT post_id, filename FROM post_images WHERE post_id IN ({q}) ORDER BY position, id"  # nosec B608 - solo placeholders ?
+    for r in db.execute(query, ids):
         out[r["post_id"]].append(r["filename"])
     return out
 

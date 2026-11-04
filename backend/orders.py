@@ -25,8 +25,8 @@ def move(db, order_id: int, allowed: tuple, to: str, **extra) -> dict:
     """Transición atómica de estado; falla si otro proceso ya la cambió."""
     sets = ["status=?", "updated_at=?"] + [f"{k}=?" for k in extra]
     q = ",".join("?" * len(allowed))
-    query = f"UPDATE orders SET {','.join(sets)} WHERE id=? AND status IN ({q})"
-    cur = db.execute(query, (to, now(), *extra.values(), order_id, *allowed))  # nosec B608
+    query = f"UPDATE orders SET {','.join(sets)} WHERE id=? AND status IN ({q})"  # nosec B608 - claves de extra las fija el código, valores parametrizados
+    cur = db.execute(query, (to, now(), *extra.values(), order_id, *allowed))
     if cur.rowcount != 1:
         raise Conflict("El estado de la orden cambió. Actualiza la página.")
     return dict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())

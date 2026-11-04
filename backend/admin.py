@@ -177,7 +177,7 @@ def delete_user(uid):
             db.execute("UPDATE messages SET content='[mensaje eliminado]' WHERE sender_id=?", (uid,))
             for table in ("sessions", "notifications", "wishlist", "alumni_verifications",
                           "favorites", "auth_challenges", "totp_recovery_codes"):
-                db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+                db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))  # nosec B608 - tabla tomada de tupla fija, no de entrada del usuario
             db.execute("DELETE FROM login_codes WHERE email=?", (u["email"],))
             db.execute("UPDATE reports SET status='resolved' WHERE target_type='user' AND target_id=?", (uid,))
             db.execute(

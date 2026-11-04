@@ -53,11 +53,11 @@ def activity():
     args = [uid] * sum(_BRANCHES[k][1] for k in chosen)
 
     db = get_db()
-    total = db.execute(f"SELECT COUNT(*) c FROM ({sql})", args).fetchone()["c"]
+    total = db.execute(f"SELECT COUNT(*) c FROM ({sql})", args).fetchone()["c"]  # nosec B608 - SQL fijo (_BRANCHES); valores parametrizados
     pages = max(1, -(-total // PER_PAGE))
     page = min(page, pages)
     items = rows(db.execute(
-        f"SELECT * FROM ({sql}) ORDER BY ts DESC, ref DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM ({sql}) ORDER BY ts DESC, ref DESC LIMIT ? OFFSET ?",  # nosec B608 - SQL fijo (_BRANCHES); valores parametrizados
         [*args, PER_PAGE, (page - 1) * PER_PAGE]))
     for it in items:
         it["link"] = _link(it["kind"], it["ref"], it["ref2"])
