@@ -222,3 +222,66 @@ def upload_backup_file():
         return api_error("Error interno al procesar el archivo subido.", 500)
 
     return jsonify({"ok": True, "backup": info, "message": "Respaldo subido y verificado exitosamente."})
+
+
+@bp.get("/metrics")
+@admin_required
+def admin_metrics():
+    db = get_db()
+    
+    # 1. Usuarios registrados por mes
+    users_by_month = db.execute(
+        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count FROM users GROUP BY month ORDER BY month ASC"
+    ).fetchall()
+    
+    # 2. Publicaciones por categoría
+    posts_by_category = db.execute(
+        "SELECT category, COUNT(*) as count FROM posts GROUP BY category"
+    ).fetchall()
+    
+    # 3. Transacciones / Órdenes por mes
+    transactions = db.execute(
+        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count, SUM(amount_cents) as total FROM orders GROUP BY month ORDER BY month ASC"
+    ).fetchall()
+
+    return jsonify({
+        "ok": True,
+        "users_monthly": [{"month": r["month"], "count": r["count"]} for r in users_by_month],
+        "posts_category": [{"category": r["category"], "count": r["count"]} for r in posts_by_category],
+        "transactions": [{"month": r["month"], "count": r["count"], "total": r["total"]} for r in transactions]
+    })
+
+
+# ------------------------------------------------------------- Premoderación
+@bp.get("/posts/pending")
+@admin_required
+def get_pending_posts():
+    db = get_db()
+    from posts import BASE_SELECT, images_for, serialize
+    posts = rows(db.execute(f"{BASE_SELECT} WHERE p.status='pending' ORDER BY p.id DESC"))
+    imgs = images_for(db, [p["id"] for p in posts])
+    out = [serialize(p, imgs[p["id"]]) for p in posts]
+    return jsonify({"ok": True, "posts": out})
+
+
+@bp.post("/posts/<int:pid>/moderate")
+@admin_required
+def moderate_post(pid):
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")  # "approve" o "reject"
+    if action not in ("approve", "reject"):
+        return api_error("Acción no válida.", 400)
+    
+    db = get_db()
+    with tx(db):
+        post = db.execute("SELECT * FROM posts WHERE id=? AND status='pending'", (pid,)).fetchone()
+        if not post:
+            return api_error("Publicación no encontrada o ya moderada.", 404)
+        
+        new_status = "active" if action == "approve" else "removed"
+        db.execute("UPDATE posts SET status=? WHERE id=?", (new_status, pid))
+        
+        msg = "¡Tu publicación fue aprobada y ya es visible en ECO-GALLO!" if action == "approve" else "Tu publicación fue rechazada por no cumplir con las normas de la comunidad."
+        notify(db, post["author_id"], msg, f"#/post/{pid}" if action == "approve" else "#/mine")
+        
+    return jsonify({"ok": True, "status": new_status})

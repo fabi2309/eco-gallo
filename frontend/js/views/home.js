@@ -44,6 +44,7 @@ export async function render(root, { state }) {
   const meta = state.meta;
   const defaults = { q: "", category: "todos", tipo: "todos", centro: "todos", sort: "nuevo", condition: "todos", min: "", max: "" };
   const f = { ...defaults, ...JSON.parse(sessionStorage.getItem("eg_filters") || "{}") };
+
   root.innerHTML = `
     ${hero(state)}
     <section class="searchbar">
@@ -83,31 +84,109 @@ export async function render(root, { state }) {
       catch (e) { toast(e.message, true); }
     });
   };
-  // Búsquedas recientes (solo en este navegador).
+
+// 1. Envolver el input #q en un contenedor relativo exclusivo
+  const qInput = root.querySelector("#q");
+  if (qInput && !qInput.parentNode.classList.contains("q-wrapper")) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "q-wrapper";
+    wrapper.style.cssText = "position: relative; width: 100%; grid-column: 1 / -1;";
+    qInput.parentNode.insertBefore(wrapper, qInput);
+    wrapper.appendChild(qInput);
+  }
+
+  // 2. Crear la lista flotante ocultándola por defecto (display: none)
+  let suggestionsBox = root.querySelector("#smart-suggestions");
+  if (!suggestionsBox) {
+    suggestionsBox = document.createElement("ul");
+    suggestionsBox.id = "smart-suggestions";
+    suggestionsBox.style.cssText = "position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-card, #fff); border: 1px solid var(--border, #ccc); list-style: none; padding: 4px 0; margin: 0; z-index: 9999; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); max-height: 250px; overflow-y: auto; display: none;";
+    qInput.parentNode.appendChild(suggestionsBox);
+  }
+
+  // 3. Controlar la visibilidad al escribir
+  qInput.oninput = (e) => {
+    f.q = e.target.value; 
+    clearTimeout(t); 
+    
+    const query = f.q.trim();
+    if (query.length < 2) {
+      suggestionsBox.innerHTML = "";
+      suggestionsBox.style.display = "none";
+      t = setTimeout(load, 250);
+      return;
+    }
+
+    t = setTimeout(async () => {
+      load();
+      try {
+        const res = await api.get(`/api/search/smart?q=${encodeURIComponent(query)}`);
+        if (!res || !res.length) {
+          suggestionsBox.innerHTML = `<li style="padding: 10px; color: var(--muted); font-size: 0.85rem;">Sin sugerencias directas</li>`;
+          suggestionsBox.style.display = "block";
+          return;
+        }
+        suggestionsBox.innerHTML = res.map(p => `
+          <li style="padding: 10px; cursor: pointer; border-bottom: 1px solid var(--border);" data-id="${p.id}">
+            <strong>${esc(p.title)}</strong> 
+            <span style="float: right; color: var(--green); font-weight: bold;">${p.price_cents ? '$' + (p.price_cents/100).toFixed(2) : 'Intercambio/Gratis'}</span>
+          </li>
+        `).join("");
+        suggestionsBox.style.display = "block";
+
+        suggestionsBox.querySelectorAll("li[data-id]").forEach(li => {
+          li.onclick = () => {
+            window.location.hash = `#/post/${li.dataset.id}`;
+            suggestionsBox.innerHTML = "";
+            suggestionsBox.style.display = "none";
+          };
+        });
+      } catch (err) {
+        console.error("Error en sugerencias inteligentes:", err);
+      }
+    }, 250);
+  };
+
+  // Ocultar si hace clic fuera
+  document.addEventListener("click", (evt) => {
+    if (!qInput.contains(evt.target) && !suggestionsBox.contains(evt.target)) {
+      suggestionsBox.innerHTML = "";
+      suggestionsBox.style.display = "none";
+    }
+  });
+
+  // Búsquedas recientes
   const recents = () => store.get("eg_recent", []);
   const paintRecent = () => {
     const r = recents(), box = root.querySelector("#recent");
     if (!box) return;
     box.innerHTML = r.length ? `<span class="muted small">Recientes:</span>${r.map((x, i) => `<button class="chip sm" data-rq="${i}">${icon("search")}${esc(x)}</button>`).join("")}<button class="linkbtn" id="clr">Borrar</button>` : "";
-    box.querySelectorAll("[data-rq]").forEach((b) => (b.onclick = () => { f.q = r[+b.dataset.rq]; root.querySelector("#q").value = f.q; load(); }));
+    box.querySelectorAll("[data-rq]").forEach((b) => (b.onclick = () => { f.q = r[+b.dataset.rq]; qInput.value = f.q; load(); }));
     box.querySelector("#clr")?.addEventListener("click", () => { store.set("eg_recent", []); paintRecent(); });
   };
+
   const remember = () => {
     const q = f.q.trim(); if (q.length < 2) return;
     store.set("eg_recent", [q, ...recents().filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, 6)); paintRecent();
   };
+
   const resetFilters = () => { Object.assign(f, defaults); sessionStorage.setItem("eg_filters", JSON.stringify(f)); render(root, { state }); };
+
   paintRecent();
-  root.querySelector("#q").oninput = (e) => { f.q = e.target.value; clearTimeout(t); t = setTimeout(load, 250); };
-  root.querySelector("#q").addEventListener("change", remember);
-  root.querySelector("#q").addEventListener("keydown", (e) => e.key === "Enter" && remember());
+  qInput.addEventListener("change", remember);
+  qInput.addEventListener("keydown", (e) => e.key === "Enter" && remember());
+
   for (const id of ["min", "max"]) root.querySelector("#" + id).oninput = (e) => { f[id] = e.target.value; clearTimeout(t); t = setTimeout(load, 350); };
+  
   root.querySelectorAll("[data-cat]").forEach((b) => (b.onclick = () => {
     f.category = b.dataset.cat;
     root.querySelectorAll("[data-cat]").forEach((x) => x.setAttribute("aria-pressed", x === b));
     load();
   }));
+
   for (const id of ["tipo", "centro", "sort", "condition"]) root.querySelector("#" + id).onchange = (e) => { f[id] = e.target.value; load(); };
+  
   api.get("/api/impact").then((s) => root.querySelectorAll("#stats [data-n]").forEach((el) => countUp(el, s[el.dataset.n] || 0, { decimals: +(el.dataset.d || 0) }))).catch(() => {});
+  
   await load();
 }
