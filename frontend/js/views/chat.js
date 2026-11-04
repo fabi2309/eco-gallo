@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { esc, icon, timeAgo, clock, avatar, toast } from "../ui.js";
+import { esc, icon, timeAgo, clock, avatar, badges, toast } from "../ui.js";
 
 export async function render(root, ctx) {
   return ctx.args.length ? thread(root, ctx) : inbox(root);
@@ -10,7 +10,7 @@ async function inbox(root) {
   root.innerHTML = `<h1 style="margin-bottom:16px">Mensajes</h1>` + (threads.length
     ? `<div class="list">${threads.map((t) => `<a class="item" href="#/chat/${t.post_id}/${t.other.id}">
         ${avatar(t.other)}
-        <div class="grow"><div class="t">${esc(t.other.name)} <span class="muted small">· ${esc(t.post_title)}</span></div>
+        <div class="grow"><div class="t">${esc(t.other.name)} ${badges(t.other, { compact: true })} <span class="muted small">· ${esc(t.post_title)}</span></div>
         <div class="muted small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.last.mine ? "Tú: " : ""}${esc(t.last.content)}</div></div>
         <div class="muted small">${timeAgo(t.last.created_at)}</div>${t.unread ? `<span class="badge">${t.unread}</span>` : ""}</a>`).join("")}</div>`
     : `<div class="empty">${icon("chat")}<h2>Aquí aparecerán tus conversaciones</h2><p>Abre un artículo y escribe al vendedor para coordinar la entrega.</p><a class="btn" href="#/">Ver artículos</a></div>`);
@@ -23,7 +23,7 @@ async function thread(root, { args, state, isCurrent }) {
   <a href="#/messages" class="small">← Mensajes</a>
   <div class="chat" style="margin-top:10px">
     <header>${avatar(data.other)}
-      <div class="grow"><b>${esc(data.other.name)}</b><div class="muted small">${esc(data.other.carrera || "")}</div></div>
+      <div class="grow"><b>${esc(data.other.name)}</b>${badges(data.other) ? `<div>${badges(data.other)}</div>` : ""}<div class="muted small">${esc(data.other.carrera || "")}</div></div>
       <a class="btn ghost sm" href="#/post/${postId}">${esc(data.post.title.slice(0, 22))}${data.post.title.length > 22 ? "…" : ""}</a></header>
     <div class="msgs" id="msgs" aria-live="polite"></div>
     <div><div class="safe">${icon("shield")} Encuentros seguros en el campus: ${esc(data.meeting_points.join(" · "))}. Nunca pagues fuera de ECO-GALLO si quieres tener protección.</div>

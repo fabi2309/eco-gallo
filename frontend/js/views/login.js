@@ -25,6 +25,10 @@ const shellLogin = (root, inner) => {
   root.innerHTML = `<div class="login">${HERO}<div class="panel"><div id="box">${inner || ""}</div></div></div>`;
   return () => root.querySelector("#box");
 };
+// Dominios institucionales válidos: salen del servidor (`meta.email_domains`, config ECOGALLO_EMAIL_DOMAINS).
+const domains = () => (state.meta && state.meta.email_domains) || ["edu.uaa.mx", "alumnos.uaa.mx"];
+const domText = () => domains().map((d) => "@" + d).join(" o ");
+const isInstitutional = (mail) => domains().some((d) => new RegExp("^[a-z0-9][a-z0-9._%+-]*@" + d.replace(/\./g, "\\.") + "$").test(mail));
 const errBox = (m) => (m ? `<div class="error" role="alert">${esc(m)}</div>` : "");
 
 export function render(root, { onDone }) {
@@ -39,7 +43,7 @@ export function render(root, { onDone }) {
       <h2>Inicia sesión</h2>
       <form id="f" class="stack" novalidate>
         <label class="field">Correo
-          <input class="input" name="email" type="email" inputmode="email" autocomplete="username" placeholder="al350114@edu.uaa.mx" value="${esc(email)}" required autofocus>
+          <input class="input" name="email" type="email" inputmode="email" autocomplete="username" placeholder="al350114@${domains()[0]}" value="${esc(email)}" required autofocus>
         </label>
         ${pwField("password", "Contraseña", { autocomplete: "current-password" })}
         ${errBox(msg)}
@@ -48,7 +52,7 @@ export function render(root, { onDone }) {
       </form>
       <div class="or"><span>¿Primera vez en ECO-GALLO?</span></div>
       <div class="stack">
-        <button class="btn ghost block" id="newstudent">${icon("user")} Crear cuenta con mi correo @edu.uaa.mx</button>
+        <button class="btn ghost block" id="newstudent">${icon("user")} Crear cuenta con mi correo institucional</button>
         <button class="btn ghost block" id="newalumni">${icon("shield")} Soy egresado de la UAA</button>
       </div>`;
     wirePw(box());
@@ -161,14 +165,14 @@ export function render(root, { onDone }) {
     box().innerHTML = `
       <h2>${creating ? "Crea tu cuenta" : "Entra con un código"}</h2>
       <form id="f" class="stack" novalidate>
-        <label class="field">${creating ? "Tu correo institucional (@edu.uaa.mx)" : "Correo"}
-          <input class="input" id="email" type="email" inputmode="email" autocomplete="email" placeholder="al350114@edu.uaa.mx" value="${esc(email)}" required autofocus>
+        <label class="field">${creating ? `Tu correo institucional (${domText()})` : "Correo"}
+          <input class="input" id="email" type="email" inputmode="email" autocomplete="email" placeholder="al350114@${domains()[0]}" value="${esc(email)}" required autofocus>
         </label>
         ${errBox(msg)}
         <button class="btn block">Enviarme un código</button>
         <p class="muted small">${creating
           ? "Te mandamos un código de 6 dígitos para confirmar que el correo es tuyo. Después podrás crear una contraseña para no pedir códigos cada vez."
-          : "Sirve con tu correo @edu.uaa.mx o con el correo con el que te registraste como egresado."}</p>
+          : `Sirve con tu correo ${domText()} o con el correo con el que te registraste como egresado.`}</p>
         <button type="button" class="linkbtn" id="back">← Volver a iniciar sesión con contraseña</button>
       </form>`;
     box().querySelector("#back").onclick = () => stepPassword();
@@ -176,7 +180,7 @@ export function render(root, { onDone }) {
       e.preventDefault();
       email = box().querySelector("#email").value.trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return stepEmail("Escribe un correo válido.", creating);
-      if (creating && !/^[a-z0-9][a-z0-9._%+-]*@edu\.uaa\.mx$/.test(email)) return stepEmail("Para crear la cuenta de estudiante usa tu correo @edu.uaa.mx. Si ya egresaste, usa «Soy egresado».", creating);
+      if (creating && !isInstitutional(email)) return stepEmail(`Para crear la cuenta de estudiante usa tu correo institucional (${domText()}). Si ya egresaste, usa «Soy egresado».`, creating);
       const btn = e.submitter; btn.disabled = true; btn.textContent = "Enviando…";
       await sendCode("", creating);
     };

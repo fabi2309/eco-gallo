@@ -42,7 +42,13 @@ SMTP_SSL = os.environ.get("ECOGALLO_SMTP_SSL", "0") == "1"  # 1 = SMTPS (465)
 DEV = os.environ.get("ECOGALLO_DEV", "0") == "1"
 
 # --- Reglas de acceso ---
-EMAIL_DOMAIN = "edu.uaa.mx"
+# Dominios que cuentan como "correo institucional" (se pueden cambiar sin tocar código):
+#   ECOGALLO_EMAIL_DOMAINS="edu.uaa.mx,alumnos.uaa.mx"
+EMAIL_DOMAINS = tuple(d.strip().lower().lstrip("@") for d in
+                      os.environ.get("ECOGALLO_EMAIL_DOMAINS", "edu.uaa.mx,alumnos.uaa.mx").split(",") if d.strip())
+EMAIL_DOMAIN = EMAIL_DOMAINS[0]
+# Operaciones concluidas para ganar la insignia «Vendedor verificado».
+VERIFIED_SELLER_MIN_DEALS = int(os.environ.get("ECOGALLO_VERIFIED_MIN_DEALS", "1"))
 CODE_TTL_SECONDS = 10 * 60
 CODE_MAX_ATTEMPTS = 5
 CODE_COOLDOWN_SECONDS = 45
@@ -74,7 +80,7 @@ ADMINS = {
 AVATAR_MAX_BYTES = 2 * 1024 * 1024
 BIO_MAX = 200
 WISHLIST_MAX = 10
-MAX_IMAGES = 4
+MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_PRICE_CENTS = 10_000_00  # $10,000 MXN tope por artículo (marketplace estudiantil)
 

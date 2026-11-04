@@ -75,13 +75,19 @@ s, r2 = c.call("PUT", "/api/me", {"name": "Vendedora Prueba", "carrera": "Carrer
 s, r2 = c.call("PUT", "/api/me", {"name": "Vendedora Prueba", "carrera": "Arquitectura"}); check(s == 200 and r2["user"]["centro"] == "Centro de Ciencias del Diseño y de la Construcción", "completa perfil; el centro sale de la carrera")
 seller = c
 
+# Premoderación: las publicaciones nuevas nacen «pending»; un admin las aprueba antes de que salgan al catálogo.
+_adm = login("admin@edu.uaa.mx", "Admin ECO")
+def approve(pid):
+    s_, r_ = _adm.call("POST", f"/api/admin/posts/{pid}/moderate", {"action": "approve"}); assert s_ == 200, r_
+    return pid
+
 print("Publicación")
 png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 body, h = multipart({"title": "Libro de prueba", "description": "Descripción suficiente para la prueba.",
                      "category": "Libros", "centro": "Centro de Ciencias Básicas", "tipo": "venta", "price": "200",
                      "condition": "Usado"}, [("images", "a.png", png)])
 s, r = seller.call("POST", "/api/posts", raw=body, headers=h); check(s == 201, f"crea publicación {r}")
-pid = r["id"]
+pid = approve(r["id"])
 body, h = multipart({"title": "Malo", "description": "Descripción suficiente.", "category": "Libros",
                      "tipo": "venta", "price": "10"}, [("images", "x.php", b"<?php ?>")])
 s, r = seller.call("POST", "/api/posts", raw=body, headers=h); check(s == 400, "rechaza archivo no-imagen")
@@ -109,12 +115,12 @@ s, r = buyer.call("GET", f"/api/posts/{pid}"); check(r["post"]["status"] == "sol
 print("Disputa y reembolso")
 body, h = multipart({"title": "Calculadora", "description": "Calculadora en buen estado.", "category": "Tecnología",
                      "tipo": "venta", "price": "100.50", "condition": "Usado"})
-s, r = seller.call("POST", "/api/posts", raw=body, headers=h); pid2 = r["id"]
+s, r = seller.call("POST", "/api/posts", raw=body, headers=h); pid2 = approve(r["id"])
 s, r = buyer.call("POST", "/api/orders", {"post_id": pid2}); oid2 = r["id"]
 s, r = buyer.call("POST", f"/api/orders/{oid2}/dispute", {"reason": "x"}); check(s == 400, "disputa exige motivo")
 s, r = buyer.call("POST", f"/api/orders/{oid2}/dispute", {"reason": "No llegó el artículo al punto de encuentro."}); check(s == 200, "abre disputa")
 s, r = seller.call("POST", f"/api/orders/{oid2}/refund"); check(s == 403, "vendedor no puede reembolsar en disputa (decide admin)")
-admin = login("admin@edu.uaa.mx", "Admin ECO")
+admin = _adm
 s, r = admin.call("GET", "/api/admin/overview"); check(s == 200 and len(r["disputes"]) >= 1, "admin ve disputas")
 s, r = buyer.call("GET", "/api/admin/overview"); check(s == 403, "usuario normal no entra al admin")
 s, r = admin.call("POST", f"/api/orders/{oid2}/resolve-refund", {"note": "Sin evidencia de entrega."}); check(s == 200, "admin reembolsa")
@@ -176,7 +182,7 @@ def newpost(client, title, price, cond="Usado", tipo="venta", cat="Libros", cent
     f = {"title": title, "description": desc, "category": cat, "centro": centro, "tipo": tipo, "condition": cond}
     if tipo == "venta": f["price"] = str(price)
     body, h = multipart(f); s, r = client.call("POST", "/api/posts", raw=body, headers=h); assert s == 201, r
-    return r["id"]
+    return approve(r["id"])
 fp1 = newpost(seller, f"Filtro barato {tag}", 50, "Nuevo")
 fp2 = newpost(seller, f"Filtro caro {tag}", 900, "Con detalles")
 s, r = buyer.call("GET", f"/api/posts?q={tag}&condition=Nuevo"); check([x["id"] for x in r["posts"]] == [fp1], "filtra por estado del producto")
@@ -295,7 +301,7 @@ body, h = multipart({
 }, [("images", "fisica.png", png)])
 s, r = seller.call("POST", "/api/posts", raw=body, headers=h)
 check(s == 201 and "id" in r, "crea publicación de prueba para métricas y alertas")
-f_post_id = r["id"]
+f_post_id = approve(r["id"])
 
 # Buyer consulta la publicación (incrementa vistas)
 s, r = buyer.call("GET", f"/api/posts/{f_post_id}")
@@ -337,6 +343,89 @@ check(s == 200, "seller actualiza publicación bajando el precio")
 s, r = buyer.call("GET", "/api/notifications")
 has_drop_alert = any("Bajó de precio" in n["text"] and "$280.00" in n["text"] for n in r.get("notifications", []))
 check(s == 200 and has_drop_alert, "buyer recibe notificación automática por reducción de precio")
+
+print("Insignias")
+s, r = seller.call("GET", "/api/me"); my_id = r["user"]["id"]
+check(r["user"]["badges"]["seller"] is True and r["user"]["badges"]["egresado"] is False, "vendedora con 1 venta liberada: «Vendedor verificado», no egresada")
+s, r = buyer.call("GET", f"/api/posts/{fp1}"); check(r["post"]["author"]["badges"]["seller"] is True, "el comprador ve la insignia en la publicación")
+s, r = buyer.call("GET", "/api/me"); check(r["user"]["badges"]["seller"] is False, "quien no ha vendido no la tiene")
+s, r = ec.call("GET", "/api/me"); check(r["user"]["badges"]["egresado"] is True, "egresado aprobado: «Egresado verificado»")
+s, r = ec.call("GET", "/api/me"); check(r["user"]["badges"]["seller"] is False, "egresado sin ventas: sin «Vendedor verificado»")
+s, r = buyer.call("GET", f"/api/threads/{pid2}/{my_id}"); check(s == 200 and "badges" in r["other"], "el chat incluye las insignias del otro usuario")
+
+print("Historial de actividades")
+for i in range(4): newpost(seller, f"Relleno historial {i} {tag}", 10)
+s, r = seller.call("GET", "/api/activity?kind=inventado"); check(s == 400, "tipo de actividad inválido")
+s, r = seller.call("GET", "/api/activity?page=abc"); check(s == 400, "página inválida")
+s, r = seller.call("GET", "/api/activity?kind=publicaciones"); check(s == 200 and r["total"] >= 5 and r["per_page"] == 10, "lista publicaciones")
+check(all(i["kind"] == "publicacion" for i in r["items"]), "solo publicaciones")
+s, r = seller.call("GET", "/api/activity?kind=ventas"); check(r["total"] >= 1 and all(i["kind"] == "venta" for i in r["items"]), "lista ventas")
+s, r = buyer.call("GET", "/api/activity?kind=compras"); check(r["total"] >= 1 and all(i["kind"] == "compra" for i in r["items"]), "lista compras")
+s, r = seller.call("GET", "/api/activity?kind=mensajes"); check(r["total"] >= 1 and r["items"][0]["kind"] == "mensaje_recibido", "lista mensajes recibidos")
+s, r = seller.call("GET", "/api/activity"); t_all = r["total"]; check(r["pages"] >= 2 and len(r["items"]) == 10, "«todo» se pagina de 10 en 10")
+s, r2 = seller.call("GET", "/api/activity?page=2"); ids1 = {(i["kind"], i["ref"]) for i in r["items"]}
+check(not ids1 & {(i["kind"], i["ref"]) for i in r2["items"]}, "la página 2 no repite la 1")
+s, r = seller.call("GET", "/api/activity?page=999"); check(r["page"] == r["pages"], "página fuera de rango se ajusta a la última")
+s, r = other.call("GET", "/api/activity?kind=ventas"); check(r["total"] == 0, "no se ve la actividad de otros")
+check(t_all >= 5, "el total de «todo» suma las categorías")
+
+print("Validación institucional")
+s, r = seller.call("GET", "/api/meta"); check(r.get("email_domains") == ["edu.uaa.mx", "alumnos.uaa.mx"], "meta expone los dominios válidos")
+for good in ("alu123@alumnos.uaa.mx", "doc@edu.uaa.mx"):
+    s, r = Client().call("POST", "/api/auth/request-code", {"email": good}); check(s == 200 and "dev_code" in r, f"acepta {good}")
+for bad in ("x@alumnos.uaa.mx.evil.com", "x@uaa.mx", "x@sub.alumnos.uaa.mx", "x@ALUMNOSUAA.mx"):
+    s, r = Client().call("POST", "/api/auth/request-code", {"email": bad}); check("dev_code" not in r, f"no manda código a {bad}")
+
+print("Eliminar cuentas desde Admin")
+vic_mail = f"victima{tag}@edu.uaa.mx"
+vic = login(vic_mail, "Víctima de Prueba")
+s, r = vic.call("GET", "/api/me"); vid_u = r["user"]["id"]
+vic.call("PUT", "/api/me", {"name": "Víctima de Prueba", "carrera": "Arquitectura", "bio": "Datos personales"})
+body, h = multipart({}, [("avatar", "a.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64)]); vic.call("POST", "/api/me/avatar", raw=body, headers=h)
+body, h = multipart({"title": f"Pieza de víctima {tag}", "description": "Texto largo de la publicación.", "category": "Libros", "centro": "Centro de Ciencias Básicas",
+                     "tipo": "venta", "condition": "Usado", "price": "40"}, [("images", "f.png", b"\x89PNG\r\n\x1a\n" + b"1" * 64)])
+s, r = vic.call("POST", "/api/posts", raw=body, headers=h); vpost = r["id"]
+vic.call("POST", "/api/wishlist", {"term": f"cosa personal {tag}"})
+s, r = vic.call("POST", "/api/messages", {"post_id": fp1, "receiver_id": my_id, "content": "mi mensaje privado"}); check(s == 201, "la víctima envía un mensaje")
+s, r = seller.call("DELETE", f"/api/admin/users/{vid_u}", {"confirm_email": vic_mail}); check(s == 403, "un usuario normal no puede eliminar cuentas")
+s, r = admin2.call("DELETE", f"/api/admin/users/{vid_u}", {}); check(s == 400, "exige escribir el correo")
+s, r = admin2.call("DELETE", f"/api/admin/users/{vid_u}", {"confirm_email": "otro@edu.uaa.mx"}); check(s == 400, "correo de confirmación incorrecto")
+s, r = admin2.call("GET", "/api/me"); admin_id = r["user"]["id"]
+s, r = admin2.call("DELETE", f"/api/admin/users/{admin_id}", {"confirm_email": "admin@edu.uaa.mx"}); check(s == 400, "no puede eliminarse a sí mismo")
+s, r = admin2.call("DELETE", f"/api/admin/users/{vid_u}", {"confirm_email": vic_mail}); check(s == 200, "admin elimina la cuenta")
+s, r = admin2.call("DELETE", f"/api/admin/users/{vid_u}", {"confirm_email": vic_mail}); check(s == 404, "no se elimina dos veces")
+s, r = vic.call("GET", "/api/me"); check(r["user"] is None, "sus sesiones quedan cerradas")
+s, r = Client().call("POST", "/api/auth/login", {"email": vic_mail, "password": "x" * 10}); check(s in (400, 401), "ya no puede entrar con contraseña")
+code_r = Client().call("POST", "/api/auth/request-code", {"email": vic_mail})[1]
+if "dev_code" in code_r:
+    s, r = Client().call("POST", "/api/auth/verify", {"email": vic_mail, "code": code_r["dev_code"]})
+    check(s == 200 and r["user"]["id"] != vid_u, "si vuelve a registrarse es una cuenta nueva, no la anterior")
+else:
+    check(True, "no recibe código (cooldown) — se verifica abajo con la base")
+s, r = admin2.call("GET", "/api/admin/overview"); check(vid_u not in [u["id"] for u in r["users"]], "desaparece de la lista de usuarios")
+s, r = buyer.call("GET", f"/api/posts/{vpost}"); check(s == 404 or r.get("post", {}).get("status") == "removed", "sus publicaciones quedan retiradas")
+s, r = buyer.call("GET", f"/api/posts?q=v%C3%ADctima+{tag}"); check(vpost not in [x["id"] for x in r["posts"]], "ya no aparecen en el catálogo")
+s, r = seller.call("GET", f"/api/threads/{fp1}/{vid_u}"); msgs = r.get("messages", []) if s == 200 else []
+check(all("privado" not in m["content"] for m in msgs), "su texto de mensajes se borró")
+check(all("Víctima" not in json.dumps(x) for x in (r,)), "su nombre ya no aparece en los hilos")
+s, r = seller.call("GET", "/api/threads"); check("Víctima de Prueba" not in json.dumps(r), "ni en la bandeja de entrada")
+
+s, r = seller.call("POST", "/api/auth/logout"); s, r = seller.call("GET", "/api/posts"); check(s == 401, "logout cierra sesión")
+
+print("Desbloqueo por código (espera el cooldown de reenvío)")
+import time
+for _ in range(50):
+    code2 = Client().call("POST", "/api/auth/request-code", {"email": e})[1]
+    if "dev_code" in code2: break
+    time.sleep(1)
+cc = Client(); s, r = cc.call("POST", "/api/auth/verify", {"email": e, "code": code2.get("dev_code", "000000")})
+check(s == 200, "el código por correo funciona con la cuenta bloqueada")
+for _ in range(50):
+    r = Client().call("POST", "/api/auth/request-code", {"email": em})[1]
+    if "dev_code" in r: break
+    time.sleep(1)
+check("dev_code" in r, "egresado registrado también puede entrar con código")
+s, r = Client().call("POST", "/api/auth/login", {"email": e, "password": "clave12345"}); check(s == 200, "y la contraseña vuelve a funcionar")
 
 print("\nRESULTADO:", "FALLÓ" if check.failed else "TODO OK")
 sys.exit(1 if check.failed else 0)

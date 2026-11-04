@@ -2,7 +2,7 @@
 from flask import Blueprint, g, jsonify, request, send_from_directory
 
 import config
-from auth import drop_document_file
+from auth import _drop_avatar_file, drop_document_file
 from db import get_db, now, rows, tx
 from orders import SELECT_ORDER, serialize as serialize_order
 from security import admin_required, api_error, clean_text, notify
@@ -27,7 +27,7 @@ def overview():
     ).fetchone()
     users = rows(db.execute(
         "SELECT id,email,name,carrera,centro,role,suspended,created_at,kind,verif_status "
-        "FROM users ORDER BY id DESC LIMIT 100"))
+        "FROM users WHERE deleted_at=0 ORDER BY id DESC LIMIT 100"))
     verifications = rows(db.execute(
         """SELECT v.id, v.doc_type, v.filename, v.created_at, u.id AS user_id, u.name, u.email,
                   u.carrera, u.centro
@@ -135,6 +135,69 @@ def suspend(uid):
     return jsonify({"ok": True})
 
 
+@bp.delete("/users/<int:uid>")
+@admin_required
+def delete_user(uid):
+    """Elimina una cuenta con borrado seguro de sus datos personales.
+
+    No se hace DELETE de la fila porque órdenes, mensajes y reportes de *otras* personas la
+    referencian. En su lugar la cuenta se **anonimiza**: se borran el correo, nombre, carrera,
+    bio, foto, contraseña, sesiones, notificaciones, lista de deseos, documentos de egresado,
+    códigos de acceso y fotos de sus publicaciones; sus mensajes enviados pierden el texto.
+    Se conserva solo lo necesario para la integridad del historial (ids, montos, estados).
+    La acción exige confirmar el correo para evitar borrar la cuenta equivocada.
+    """
+    data = request.get_json(silent=True) or {}
+    confirm = str(data.get("confirm_email", "")).strip().lower()
+    db = get_db()
+    files, doc_files, avatar_name = [], [], ""
+    resp = None
+    with tx(db):
+        u = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u or u["deleted_at"]:
+            resp = api_error("Cuenta no encontrada.", 404)
+        elif uid == g.user["id"]:
+            resp = api_error("No puedes eliminar tu propia cuenta desde aquí.", 400)
+        elif u["role"] == "admin":
+            resp = api_error("No se puede eliminar a otro administrador.", 400)
+        elif confirm != u["email"]:
+            resp = api_error("Escribe el correo exacto de la cuenta para confirmar.", 400)
+        elif db.execute(
+                "SELECT 1 FROM orders WHERE (buyer_id=? OR seller_id=?) AND status IN ('HELD','DELIVERED','DISPUTED')",
+                (uid, uid)).fetchone():
+            resp = api_error("Tiene pagos retenidos o en disputa. Resuélvelos antes de eliminar la cuenta.", 409)
+        else:
+            avatar_name = u["avatar"]
+            doc_files = [r["filename"] for r in db.execute(
+                "SELECT filename FROM alumni_verifications WHERE user_id=?", (uid,)) if r["filename"]]
+            files = [r["filename"] for r in db.execute(
+                "SELECT i.filename FROM post_images i JOIN posts p ON p.id=i.post_id WHERE p.author_id=?", (uid,))]
+            db.execute("DELETE FROM post_images WHERE post_id IN (SELECT id FROM posts WHERE author_id=?)", (uid,))
+            db.execute("UPDATE posts SET status='removed', description='' WHERE author_id=?", (uid,))
+            db.execute("UPDATE messages SET content='[mensaje eliminado]' WHERE sender_id=?", (uid,))
+            for table in ("sessions", "notifications", "wishlist", "alumni_verifications",
+                          "favorites", "auth_challenges", "totp_recovery_codes"):
+                db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+            db.execute("DELETE FROM login_codes WHERE email=?", (u["email"],))
+            db.execute("UPDATE reports SET status='resolved' WHERE target_type='user' AND target_id=?", (uid,))
+            db.execute(
+                """UPDATE users SET email=?, name='Cuenta eliminada', carrera='', centro='General', bio='', avatar='',
+                   password_hash='', totp_enabled=0, totp_secret='', totp_pending_secret='',
+                   totp_pending_expires_at=0, suspended=1, kind='estudiante', verif_status='approved', email_verified=0,
+                   failed_logins=0, locked_until=0, deleted_at=? WHERE id=?""",
+                (f"eliminado-{uid}@eliminado.invalid", now(), uid))
+            resp = jsonify({"ok": True})
+    _drop_avatar_file(avatar_name)
+    for name in files:
+        try:
+            (config.UPLOADS / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    for name in doc_files:
+        drop_document_file(name)
+    return resp
+
+
 # ------------------------------------------------------------- Respaldos
 @bp.get("/backups")
 @admin_required
@@ -228,17 +291,17 @@ def upload_backup_file():
 @admin_required
 def admin_metrics():
     db = get_db()
-    
+
     # 1. Usuarios registrados por mes
     users_by_month = db.execute(
         "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count FROM users GROUP BY month ORDER BY month ASC"
     ).fetchall()
-    
+
     # 2. Publicaciones por categoría
     posts_by_category = db.execute(
         "SELECT category, COUNT(*) as count FROM posts GROUP BY category"
     ).fetchall()
-    
+
     # 3. Transacciones / Órdenes por mes
     transactions = db.execute(
         "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count, SUM(amount_cents) as total FROM orders GROUP BY month ORDER BY month ASC"
@@ -271,17 +334,17 @@ def moderate_post(pid):
     action = data.get("action")  # "approve" o "reject"
     if action not in ("approve", "reject"):
         return api_error("Acción no válida.", 400)
-    
+
     db = get_db()
     with tx(db):
         post = db.execute("SELECT * FROM posts WHERE id=? AND status='pending'", (pid,)).fetchone()
         if not post:
             return api_error("Publicación no encontrada o ya moderada.", 404)
-        
+
         new_status = "active" if action == "approve" else "removed"
         db.execute("UPDATE posts SET status=? WHERE id=?", (new_status, pid))
-        
+
         msg = "¡Tu publicación fue aprobada y ya es visible en ECO-GALLO!" if action == "approve" else "Tu publicación fue rechazada por no cumplir con las normas de la comunidad."
         notify(db, post["author_id"], msg, f"#/post/{pid}" if action == "approve" else "#/mine")
-        
+
     return jsonify({"ok": True, "status": new_status})

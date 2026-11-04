@@ -19,6 +19,7 @@ def create_app() -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
     dbmod.init_db()
 
+    from activity import bp as activity_bp
     from admin import bp as admin_bp
     from auth import bp as auth_bp
     from orders import bp as orders_bp
@@ -26,7 +27,7 @@ def create_app() -> Flask:
     from social import bp as social_bp
     from wishlist import bp as wishlist_bp
 
-    for bp in (auth_bp, posts_bp, orders_bp, social_bp, wishlist_bp, admin_bp):
+    for bp in (auth_bp, posts_bp, orders_bp, social_bp, wishlist_bp, activity_bp, admin_bp):
         app.register_blueprint(bp)
 
     from backups import start_backup_scheduler

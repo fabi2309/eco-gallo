@@ -328,3 +328,74 @@ a.bell { display: inline-grid; place-items: center; text-decoration: none; }
 
 .brand span { white-space: nowrap; }
 @media (max-width: 440px) { .brand small { display: none; } .topbar .in { gap: 8px; } }
+
+/* ---- Insignias ---- */
+.insignias { display: inline-flex; flex-wrap: wrap; gap: 6px; vertical-align: middle; }
+.insignia { display: inline-flex; align-items: center; gap: 4px; font-size: .74rem; font-weight: 800; padding: 2px 9px 2px 6px; border-radius: 999px; line-height: 1.5; white-space: nowrap; }
+.insignia .icon { width: 14px; height: 14px; flex: none; }
+.insignia.egresado { background: var(--ambar-bg); color: var(--tinta); border: 1px solid var(--sol); }
+.insignia.vendedor { background: var(--verde-bg); color: var(--verde-txt); border: 1px solid var(--verde); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.insignias.under { display: flex; margin-top: 4px; }
+
+/* ---- Publicar en pasos ---- */
+.wizard { max-width: 680px; margin: 0 auto; display: grid; gap: 18px; }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; list-style: none; padding: 0; margin: 0; counter-reset: s; }
+.steps li { display: grid; gap: 4px; justify-items: center; text-align: center; font-size: .82rem; font-weight: 700; color: var(--tinta-2); position: relative; }
+.steps li::before { counter-increment: s; content: counter(s); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--suave); color: var(--tinta-2); font-weight: 800; z-index: 1; }
+.steps li::after { content: ""; position: absolute; top: 16px; left: calc(50% + 22px); width: calc(100% - 44px + 8px); height: 3px; background: var(--suave); }
+.steps li:last-child::after { display: none; }
+.steps li.done::before { content: "✓"; background: var(--verde); color: #fff; }
+.steps li.done::after { background: var(--verde); }
+.steps li.now::before { background: var(--bosque); color: #fff; box-shadow: 0 0 0 4px var(--verde-bg); }
+.steps li.now { color: var(--tinta); }
+.wizard .nav { display: flex; gap: 10px; }
+.wizard .nav .btn { flex: 1; }
+.dropzone { border: 2px dashed var(--linea); border-radius: var(--r-lg); padding: 18px; text-align: center; background: var(--papel); cursor: pointer; display: grid; gap: 6px; justify-items: center; }
+.dropzone:hover, .dropzone.over { border-color: var(--enlace); background: var(--verde-bg); }
+.dropzone .icon { width: 30px; height: 30px; color: var(--enlace); }
+.photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 10px; }
+.photos .ph1 { position: relative; aspect-ratio: 1; border-radius: 14px; overflow: hidden; background: var(--suave); }
+.photos .ph1 img { width: 100%; height: 100%; object-fit: cover; }
+.photos .ph1 button { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(20,35,27,.75); color: #fff; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.photos .ph1 button .icon { width: 14px; height: 14px; }
+.photos .ph1 .cover { position: absolute; left: 4px; bottom: 4px; background: var(--lima); color: #14231b; font-size: .68rem; font-weight: 800; border-radius: 999px; padding: 1px 8px; }
+.previewbox { display: grid; gap: 12px; }
+.previewbox .lbl { font-size: .8rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--tinta-2); }
+.previewcard { max-width: 260px; pointer-events: none; }
+.field .count { float: right; }
+
+/* ---- Historial ---- */
+.actlist { display: grid; gap: 8px; }
+.act { display: flex; gap: 12px; align-items: center; background: var(--suave-2); border-radius: var(--r-md); padding: 10px 12px; text-decoration: none; color: inherit; }
+.act:hover { background: var(--suave); }
+.act .ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--verde-bg); color: var(--verde-txt); flex: none; }
+.act .ico .icon { width: 18px; height: 18px; }
+.act .tt { font-weight: 700; overflow-wrap: anywhere; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tabs.scroll { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.tabs.scroll button { white-space: nowrap; padding: 8px 14px; }
+
+/* ---- Zoom ---- */
+.gallery .main { position: relative; cursor: zoom-in; }
+.gallery .main .zoomhint { position: absolute; right: 10px; bottom: 10px; background: rgba(20,35,27,.75); color: #fff; border-radius: 999px; padding: 6px 12px; font-size: .8rem; font-weight: 700; display: inline-flex; gap: 6px; align-items: center; pointer-events: none; }
+.gallery .main .zoomhint .icon { width: 16px; height: 16px; }
+.lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(8,16,11,.97); display: grid; grid-template-rows: auto 1fr auto; touch-action: none; }
+.lightbox header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: #fff; }
+.lightbox header .grow { font-weight: 700; }
+.lightbox .lbbtn { width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.lightbox .lbbtn:hover { background: rgba(255,255,255,.26); }
+.lightbox .lbbtn[disabled] { opacity: .35; cursor: default; }
+.lightbox .stage { overflow: hidden; position: relative; display: grid; place-items: center; cursor: zoom-in; }
+.lightbox .stage.zoomed { cursor: grab; }
+.lightbox .stage.drag { cursor: grabbing; }
+.lightbox .stage img { max-width: 100%; max-height: 100%; user-select: none; -webkit-user-drag: none; transform-origin: center; will-change: transform; }
+.lightbox .navbtn { position: absolute; top: 50%; transform: translateY(-50%); }
+.lightbox .navbtn.prev { left: 10px; } .lightbox .navbtn.next { right: 10px; }
+.lightbox footer { text-align: center; color: #cfe3d4; font-size: .82rem; padding: 8px 12px calc(10px + env(safe-area-inset-bottom)); }
+
+/* ---- Admin: eliminar cuenta ---- */
+.btn.sm.danger.ghosty { background: transparent; color: var(--rojo); border: 2px solid var(--rojo); }
+.erase { background: var(--rojo-bg); border-radius: var(--r-md); padding: 10px 12px; font-size: .9rem; }
+.erase ul { margin: 6px 0 0 18px; padding: 0; }
+.insignias-row { margin: 3px 0; }

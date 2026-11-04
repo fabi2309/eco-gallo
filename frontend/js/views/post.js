@@ -1,5 +1,6 @@
 import { api } from "../api.js";
-import { esc, icon, money, timeAgo, avatar, ask, toast, TIPO } from "../ui.js";
+import { esc, icon, money, timeAgo, avatar, badges, ask, toast, TIPO } from "../ui.js";
+import { openLightbox } from "../zoom.js";
 
 export async function render(root, { args, state, go, refresh }) {
   const { post: p } = await api.get(`/api/posts/${args[0]}`);
@@ -10,7 +11,7 @@ export async function render(root, { args, state, go, refresh }) {
   root.innerHTML = `
   <div class="detail">
     <div class="gallery">
-      <div class="main">${p.images.length ? `<img id="big" src="${esc(p.images[0])}" alt="${esc(p.title)}">` : `<div class="card"><div class="ph"><div class="noimg">${icon("image")}</div></div></div>`}</div>
+      <div class="main"${p.images.length ? ' id="zoombox" role="button" tabindex="0" aria-label="Ampliar foto"' : ""}>${p.images.length ? `<img id="big" src="${esc(p.images[0])}" alt="${esc(p.title)}"><span class="zoomhint">${icon("zoomin")} Ampliar</span>` : `<div class="card"><div class="ph"><div class="noimg">${icon("image")}</div></div></div>`}</div>
       ${p.images.length > 1 ? `<div class="thumbs">${p.images.map((s, i) => `<button data-i="${i}" aria-label="Foto ${i + 1}" aria-current="${i === 0}"><img src="${esc(s)}" alt=""></button>`).join("")}</div>` : ""}
     </div>
     <div class="info">
@@ -21,7 +22,7 @@ export async function render(root, { args, state, go, refresh }) {
       <p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(p.description)}</p>
       <div class="muted small">${esc(p.centro)} · publicado ${timeAgo(p.created_at)}</div>
       <div class="seller">${avatar(p.author)}
-        <div class="grow"><b>${esc(p.author.name)}</b><div class="muted small">${esc(p.author.carrera || p.author.centro)}</div>
+        <div class="grow"><b>${esc(p.author.name)}</b>${badges(p.author, {}) ? `<div class="insignias-row">${badges(p.author)}</div>` : ""}<div class="muted small">${esc(p.author.carrera || p.author.centro)}</div>
         ${p.author.bio ? `<div class="small bio">${esc(p.author.bio)}</div>` : ""}</div></div>
       ${mine ? `
         <div class="panelbox stack" style="margin:14px 0 6px;padding:12px 14px;background:var(--bg-card)">
@@ -47,10 +48,18 @@ export async function render(root, { args, state, go, refresh }) {
     root.querySelectorAll(".thumbs button").forEach((x) => x.setAttribute("aria-current", x === b));
   }));
 
+  const zb = root.querySelector("#zoombox");
+  if (zb) {
+    const open = () => openLightbox(p.images, shown, p.title);
+    zb.onclick = open;
+    zb.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+  }
+
   const act = root.querySelector("#actions");
   if (mine) {
     act.innerHTML = `
       ${p.live_order ? `<a class="btn accent block" href="#/order/${p.live_order.id}">${icon("shield")} Ver el pago retenido</a>` : ""}
+      ${p.status === "pending" ? `<div class="notice">${icon("shield")} Tu publicación está <b>en revisión</b>: se mostrará en el catálogo cuando un administrador la apruebe.</div>` : ""}
       ${p.status === "paused" ? `<div class="notice">${icon("pause")} Tu publicación está <b>pausada</b>: nadie la ve en el catálogo hasta que la reanudes.</div>` : ""}
       ${p.status === "active" || p.status === "paused" ? `<div class="row wrap"><a class="btn ghost grow" href="#/edit/${p.id}">Editar</a>
         <button class="btn ghost grow" id="pause">${p.status === "paused" ? `${icon("play")} Reanudar` : `${icon("pause")} Pausar`}</button>

@@ -45,6 +45,13 @@ const P = {
   chip: '<rect x="7" y="7" width="10" height="10" rx="1.500"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/>',
   grid: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.500-3.500"/>',
+  verified: '<path d="M12 2.500 14.400 4.200l2.900-.1.9 2.800 2.400 1.700-.9 2.800.9 2.800-2.400 1.700-.9 2.800-2.900-.1L12 21.500l-2.400-1.700-2.900.1-.9-2.800-2.400-1.700.9-2.800-.9-2.800 2.400-1.700.9-2.800 2.900.1z"/><path d="m8.500 12 2.500 2.500 4.500-5"/>',
+  cap: '<path d="M2 9 12 4l10 5-10 5z"/><path d="M6 11.500V16c0 1.500 3 3 6 3s6-1.500 6-3v-4.500M22 9v6"/>',
+  zoomin: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.500-3.500M11 8v6M8 11h6"/>',
+  zoomout: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.500-3.500M8 11h6"/>',
+  trash: '<path d="M4 7h16M10 3h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
+  left: '<path d="m15 5-7 7 7 7"/>',
+  right: '<path d="m9 5 7 7-7 7"/>',
   eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
   moon: '<path d="M20 14.500A8 8 0 0 1 9.500 4 8 8 0 1 0 20 14.500z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.500 1.500M17.500 17.500 19 19M19 5l-1.500 1.500M6.500 17.500 5 19"/>',
@@ -66,13 +73,13 @@ export function toast(msg, isErr = false) {
 }
 
 /** Modal con formulario opcional. Devuelve una promesa con el texto (o true) o null si se cancela. */
-export function ask({ title, text = "", field = null, confirm = "Aceptar", danger = false }) {
+export function ask({ title, text = "", field = null, confirm = "Aceptar", danger = false, minLength = 10 }) {
   return new Promise((resolve) => {
     const ov = document.createElement("div");
     ov.className = "overlay";
     ov.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <h2>${esc(title)}</h2>${text ? `<p class="muted">${esc(text)}</p>` : ""}
-      ${field ? `<textarea class="input" name="v" maxlength="500" placeholder="${esc(field)}" required minlength="10"></textarea>` : ""}
+      ${field ? `<textarea class="input" name="v" maxlength="500" placeholder="${esc(field)}" required minlength="${minLength}"></textarea>` : ""}
       <div class="row"><button type="button" class="btn ghost grow" data-x>Cancelar</button>
       <button class="btn grow ${danger ? "danger" : ""}">${esc(confirm)}</button></div></form>`;
     const done = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
@@ -156,4 +163,13 @@ export function toggleTheme() {
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   try { localStorage.setItem("eg_theme", dark ? "dark" : "light"); } catch { /* ignorar */ }
   return dark;
+}
+
+/** Insignias de confianza («Egresado verificado» / «Vendedor verificado»). `u.badges` viene del servidor. */
+export function badges(u, { compact = false } = {}) {
+  const b = (u && u.badges) || {};
+  const out = [];
+  if (b.egresado) out.push(`<span class="insignia egresado" title="Su documento de egresado fue revisado por la administración">${icon("cap")}${compact ? "" : " "}<span${compact ? ' class="sr"' : ""}>Egresado verificado</span></span>`);
+  if (b.seller) out.push(`<span class="insignia vendedor" title="Identidad UAA confirmada y ${b.deals} operación(es) concluida(s)">${icon("verified")}${compact ? "" : " "}<span${compact ? ' class="sr"' : ""}>Vendedor verificado</span></span>`);
+  return out.length ? `<span class="insignias">${out.join("")}</span>` : "";
 }

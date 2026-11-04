@@ -52,7 +52,9 @@ EMAIL_RE = re.compile(
     r"^[a-z0-9][a-z0-9._%+\-]{0,63}@[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?"
     r"(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)+$"
 )
-INSTITUTIONAL_RE = re.compile(r"^[a-z0-9][a-z0-9._%+\-]{0,63}@edu\.uaa\.mx$")
+INSTITUTIONAL_RE = re.compile(
+    r"^[a-z0-9][a-z0-9._%+\-]{0,63}@(?:" + "|".join(re.escape(d) for d in config.EMAIL_DOMAINS) + r")$"
+)
 
 
 def api_error(message: str, status: int = 400, **extra):

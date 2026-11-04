@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS users(
   email_verified INTEGER NOT NULL DEFAULT 1,
   verif_status TEXT NOT NULL DEFAULT 'approved',    -- approved | pending | rejected (solo egresados)
   bio TEXT NOT NULL DEFAULT '',
-  avatar TEXT NOT NULL DEFAULT ''                   -- nombre de archivo en uploads/
+  avatar TEXT NOT NULL DEFAULT '',                  -- nombre de archivo en uploads/
+  deleted_at INTEGER NOT NULL DEFAULT 0             -- >0: cuenta eliminada por un admin (datos anonimizados)
 );
 
 CREATE TABLE IF NOT EXISTS login_codes(
@@ -233,6 +234,7 @@ _USER_MIGRATIONS = {
     "verif_status": "TEXT NOT NULL DEFAULT 'approved'",
     "bio": "TEXT NOT NULL DEFAULT ''",
     "avatar": "TEXT NOT NULL DEFAULT ''",
+    "deleted_at": "INTEGER NOT NULL DEFAULT 0",
     "totp_enabled": "INTEGER NOT NULL DEFAULT 0",
     "totp_secret": "TEXT NOT NULL DEFAULT ''",
     "totp_pending_secret": "TEXT NOT NULL DEFAULT ''",

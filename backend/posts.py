@@ -8,6 +8,7 @@ from flask import Blueprint, g, jsonify, request
 
 import catalog
 import config
+from badges import BADGE_COLS, compute as compute_badges
 from db import get_db, now, rows, tx
 from security import api_error, clean_text, login_required
 from wishlist import notify_matches
@@ -85,7 +86,7 @@ def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
         "status": row["status"], "created_at": row["created_at"],
         "author": {"id": row["author_id"], "name": row["author_name"],
                    "carrera": row["author_carrera"], "centro": row["author_centro"],
-                   "bio": row["author_bio"],
+                   "bio": row["author_bio"], "badges": compute_badges(row),
                    "avatar": f"/uploads/{row['author_avatar']}" if row["author_avatar"] else ""},
         "images": [f"/uploads/{n}" for n in images],
     }
@@ -100,8 +101,9 @@ def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
     return out
 
 
-BASE_SELECT = """SELECT p.*, u.name AS author_name, u.carrera AS author_carrera,
-                        u.centro AS author_centro, u.bio AS author_bio, u.avatar AS author_avatar
+BASE_SELECT = f"""SELECT p.*, u.name AS author_name, u.carrera AS author_carrera,
+                        u.centro AS author_centro, u.bio AS author_bio, u.avatar AS author_avatar,
+                        {BADGE_COLS}
                  FROM posts p JOIN users u ON u.id = p.author_id"""
 
 
@@ -120,7 +122,7 @@ def images_for(db, ids: list[int]) -> dict[int, list[str]]:
 def meta():
     return jsonify({
         "categories": config.CATEGORIES, "centros": config.CENTROS, "tipos": config.TIPOS,
-        "carreras": catalog.CENTROS_CARRERAS,
+        "carreras": catalog.CENTROS_CARRERAS, "email_domains": list(config.EMAIL_DOMAINS),
         "password_min": config.PASSWORD_MIN, "doc_types": config.VERIF_DOC_TYPES,
         "conditions": config.CONDITIONS, "meeting_points": config.SAFE_MEETING_POINTS,
         "max_images": config.MAX_IMAGES, "max_price_cents": config.MAX_PRICE_CENTS,
@@ -135,6 +137,7 @@ SYNONYMS = {
     'calculadora': ['casio', 'cientifica'],
     'bata': ['laboratorio', 'quimica', 'medicina']
 }
+
 
 def expand_query(term):
     """Expande el término de búsqueda usando el diccionario de sinónimos"""
@@ -159,7 +162,7 @@ def smart_search():
     # 1. Obtener todas las publicaciones activas
     posts_cursor = db.execute(f"{BASE_SELECT} WHERE p.status IN ('active','reserved')")
     posts = rows(posts_cursor)
-    
+
     search_terms = expand_query(query)
     matched_products = set()
 
@@ -168,7 +171,7 @@ def smart_search():
     for term in search_terms:
         # Tolerancia a errores de escritura con difflib (cutoff=0.3 permite errores tipográficos)
         close_titles = difflib.get_close_matches(term, all_titles, n=5, cutoff=0.3)
-        
+
         for p in posts:
             if any(t in p['title'].lower() for t in search_terms) or \
                any(t in p['description'].lower() for t in search_terms) or \
@@ -178,7 +181,7 @@ def smart_search():
     # Filtrar las publicaciones que coincidieron preservando el orden y formato
     filtered_posts = [p for p in posts if p["id"] in matched_products]
     imgs = images_for(db, [p["id"] for p in filtered_posts])
-    
+
     out_posts = [serialize(p, imgs[p["id"]]) for p in filtered_posts[:10]]
     return jsonify(out_posts)
 

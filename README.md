@@ -61,7 +61,7 @@ Comprador paga ──► HELD (retenido) ──► DELIVERED (vendedor marca ent
   `PaymentProvider` con una pasarela que soporte retención/captura diferida (Stripe Connect, Mercado Pago…).
 
 ## Módulos (según la tesina)
-Autenticación (código, contraseña, egresados verificados) · Publicaciones (hasta 4 fotos; se pueden **pausar** y reanudar) ·
+Autenticación (código, contraseña, egresados verificados) · Publicaciones (hasta 5 fotos; se pueden **pausar** y reanudar) · **Publicar en 3 pasos** con vista previa · **Zoom de imágenes** · **Insignias** «Egresado verificado» / «Vendedor verificado» · **Historial de actividad** paginado en el perfil ·
 Búsqueda y filtros (texto, categoría, tipo, centro, **estado del producto y rango de precio**) con **búsquedas recientes** ·
 **Lista de deseos** (aviso en la campana cuando alguien publica algo que coincide; se revisa cada 30 s) ·
 Perfil con **foto y biografía** · **Modo oscuro** · Mensajería por publicación
@@ -69,7 +69,7 @@ con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Pa
 Dashboard de impacto (CO₂e estimado por categoría).
 
 ## Pruebas
-Arranca con `ECOGALLO_ADMINS=admin@edu.uaa.mx ./run.sh` y luego `python3 tests/e2e_api.py` (~100 comprobaciones: login, contraseñas, egresados, filtros, pausa, foto/bio, lista de deseos, escrow, disputas, permisos; tarda ~1 min por esperas de reenvío). Para no chocar con el límite del gateway: `ECOGALLO_AUTH_LIMIT=500 ./run.sh`.
+Arranca con `ECOGALLO_ADMINS=admin@edu.uaa.mx ./run.sh` y luego `python3 tests/e2e_api.py` (~165 comprobaciones: login, contraseñas, egresados, filtros, pausa, foto/bio, lista de deseos, escrow, disputas, permisos; tarda ~1 min por esperas de reenvío). Para no chocar con el límite del gateway: `ECOGALLO_AUTH_LIMIT=500 ./run.sh`.
 
 ## Estructura
 ```
@@ -84,3 +84,13 @@ run_dev.py / run_dev.bat   servidor local de desarrollo en Python (sin necesidad
 `backend/catalog.py` es la única fuente (registro, perfil, filtros, publicaciones). El centro del usuario se deduce de su carrera.
 La lista se armó desde una fuente secundaria (el portal de la UAA bloquea la lectura automática): contrástala con
 https://www.uaa.mx/portal/oferta-educativa/licenciaturas/ y corrige ahí si cambia algo. Las bases existentes se migran solas (nombres de centro y columnas nuevas).
+
+### Insignias
+- **Egresado verificado**: egresado cuyo kárdex/título aprobó un administrador.
+- **Vendedor verificado**: correo institucional confirmado (o egresado aprobado) y al menos `ECOGALLO_VERIFIED_MIN_DEALS` (por defecto 1) venta liberada o entrega concluida.
+
+### Correo institucional
+Solo `@alumnos.uaa.mx` y `@edu.uaa.mx` exactos crean cuenta de estudiante; subdominios y dominios parecidos se rechazan. Se cambia con `ECOGALLO_EMAIL_DOMAINS`.
+
+### Eliminar una cuenta (Admin)
+Administración → Usuarios → *Eliminar* (hay que escribir el correo exacto). La cuenta se anonimiza: se borran correo, nombre, foto, contraseña, 2FA, mensajes enviados, lista de deseos, favoritos, documentos de egresado y fotos de sus publicaciones. No permite eliminarse a uno mismo, a otro admin ni a quien tenga pagos retenidos.

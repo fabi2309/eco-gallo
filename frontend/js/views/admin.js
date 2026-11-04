@@ -79,7 +79,8 @@ export async function render(root, { state, refresh, go }) {
         <button class="btn sm danger" data-r="${r.id}" data-a="${r.target_type === "post" ? "remove_post" : "suspend_user"}">${r.target_type === "post" ? "Retirar" : "Suspender"}</button></div></div>`).join("") : '<p class="muted">Sin reportes.</p>'}</div>
     <div class="panelbox stack"><h2>Usuarios</h2><div class="list">
       ${d.users.map((u) => `<div class="item"><div class="grow"><div class="t">${esc(u.name || "(sin nombre)")} ${u.role === "admin" ? "· admin" : ""}${u.kind === "egresado" ? ` · egresado (${u.verif_status === "approved" ? "verificado" : u.verif_status === "rejected" ? "rechazado" : "pendiente"})` : ""}</div><div class="muted small">${esc(u.email)}</div></div>
-        ${u.role === "admin" || u.id === state.user.id ? "" : `<button class="btn sm ${u.suspended ? "" : "ghost"}" data-u="${u.id}" data-s="${u.suspended ? 0 : 1}">${u.suspended ? "Reactivar" : "Suspender"}</button>`}</div>`).join("")}</div></div>
+        ${u.role === "admin" || u.id === state.user.id ? "" : `<div class="row"><button class="btn sm ${u.suspended ? "" : "ghost"}" data-u="${u.id}" data-s="${u.suspended ? 0 : 1}">${u.suspended ? "Reactivar" : "Suspender"}</button>
+          <button class="btn sm danger ghosty" data-del="${u.id}" data-mail="${esc(u.email)}" data-name="${esc(u.name || u.email)}" aria-label="Eliminar cuenta de ${esc(u.name || u.email)}">${icon("trash")} Eliminar</button></div>`}</div>`).join("")}</div></div>
     <div class="panelbox stack">
       <div class="row wrap between" style="align-items:center">
         <h2>Respaldos del Sistema ${bks.backups?.length ? `<span class="badge inline">${bks.backups.length}</span>` : ""}</h2>
@@ -163,6 +164,17 @@ export async function render(root, { state, refresh, go }) {
   root.querySelectorAll("[data-u]").forEach((b) => (b.onclick = async () => {
     try { await api.post(`/api/admin/users/${b.dataset.u}/suspend`, { suspended: b.dataset.s === "1" }); toast("Listo"); refresh(); } catch (e) { toast(e.message, true); }
   }));
+  root.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+    const mail = await ask({
+      title: `Eliminar la cuenta de ${b.dataset.name}`,
+      text: "Se borran de forma permanente su correo, nombre, carrera, foto, contraseña, mensajes enviados, lista de deseos, documentos de egresado y fotos de sus publicaciones. Sus publicaciones se retiran. Solo se conserva el historial anónimo de pagos. No se puede deshacer.",
+      field: `Para confirmar escribe el correo: ${b.dataset.mail}`, confirm: "Eliminar para siempre", danger: true, minLength: 5,
+    });
+    if (!mail) return;
+    try { await api.del(`/api/admin/users/${b.dataset.del}`, { confirm_email: mail }); toast("Cuenta eliminada y datos borrados"); refresh(); }
+    catch (e) { toast(e.message, true); }
+  }));
+
   root.querySelectorAll("[data-mod-post]").forEach((btn) => {
     btn.onclick = async () => {
       const pid = btn.dataset.modPost;

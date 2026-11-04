@@ -43,7 +43,7 @@ public class Gateway {
             Map.entry("webp", "image/webp"), Map.entry("ico", "image/x-icon"),
             Map.entry("woff2", "font/woff2"), Map.entry("txt", "text/plain; charset=utf-8"));
 
-    static final String CSP = "default-src 'self'; img-src 'self' data:; "
+    static final String CSP = "default-src 'self'; img-src 'self' data: blob:; "
             + "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             + "font-src 'self' https://fonts.gstatic.com; script-src 'self'; "
             + "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";

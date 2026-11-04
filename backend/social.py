@@ -2,6 +2,7 @@
 from flask import Blueprint, g, jsonify, request
 
 import config
+from badges import user_badges
 from db import get_db, now, rows
 from security import api_error, clean_text, login_required
 
@@ -32,7 +33,8 @@ def threads():
                AND read_at IS NULL""", (r["post_id"], r["other_id"], uid)).fetchone()["c"]
         out.append({"post_id": r["post_id"], "post_title": r["post_title"],
                     "other": {"id": other["id"], "name": other["name"] or "Usuario",
-                              "avatar": f"/uploads/{other['avatar']}" if other["avatar"] else ""},
+                              "avatar": f"/uploads/{other['avatar']}" if other["avatar"] else "",
+                              "badges": user_badges(db, other["id"])},
                     "last": {"content": last["content"][:120], "created_at": last["created_at"],
                              "mine": last["sender_id"] == uid},
                     "unread": unread})
@@ -57,6 +59,7 @@ def thread(post_id, other_id):
         (now(), post_id, other_id, uid))
     other = dict(other)
     other["avatar"] = f"/uploads/{other['avatar']}" if other["avatar"] else ""
+    other["badges"] = user_badges(db, other["id"])
     return jsonify({"ok": True, "post": dict(post), "other": other, "messages": msgs,
                     "meeting_points": config.SAFE_MEETING_POINTS})
 
@@ -139,7 +142,7 @@ def report():
 
 # -------------------------------------------------------------- impacto
 def impact_numbers(db) -> dict:
-    users = db.execute("SELECT COUNT(*) c FROM users WHERE name != ''").fetchone()["c"]
+    users = db.execute("SELECT COUNT(*) c FROM users WHERE name != '' AND deleted_at=0").fetchone()["c"]
     active = db.execute("SELECT COUNT(*) c FROM posts WHERE status IN ('active','reserved')").fetchone()["c"]
     done = rows(db.execute("SELECT category, tipo, price_cents FROM posts WHERE status='sold'"))
     co2 = sum(config.CO2_KG.get(p["category"], 2.0) for p in done)

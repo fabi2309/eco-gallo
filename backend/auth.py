@@ -1,7 +1,7 @@
 """Acceso: código de un solo uso, contraseña, y alta de egresados con documento.
 
 Tres formas de entrar:
-  1. Estudiante con @edu.uaa.mx: código al correo (crea la cuenta la primera vez).
+  1. Estudiante con correo institucional (@edu.uaa.mx / @alumnos.uaa.mx): código al correo (crea la cuenta la primera vez).
   2. Cualquier cuenta que ya tenga contraseña: correo + contraseña (sin códigos).
   3. Egresado: se registra con cualquier correo + kárdex/título; un admin lo revisa.
 """
@@ -15,6 +15,7 @@ from cryptography.fernet import InvalidToken
 
 import catalog
 import config
+from badges import user_badges
 from db import get_db, now, rows, tx
 from security import (
     api_error, check_password, clean_text, client_ip, create_session,
@@ -82,6 +83,7 @@ def public_user(u: dict) -> dict:
         "has_password": bool(u["password_hash"]),
         "totp_enabled": bool(u["totp_enabled"]),
         "bio": u["bio"],
+        "badges": user_badges(get_db(), u["id"]),
         "avatar": f"/uploads/{u['avatar']}" if u["avatar"] else "",
     }
 

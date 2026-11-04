@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { esc, icon, money, TIPO, CAT_ICON, countUp, store, toast } from "../ui.js";
+import { esc, icon, money, badges, TIPO, CAT_ICON, countUp, store, toast } from "../ui.js";
 
 export function card(p) {
   const img = p.images[0];
@@ -8,7 +8,7 @@ export function card(p) {
     <div class="ph">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<div class="noimg">${icon("image")}</div>`}
       <span class="tag ${esc(p.tipo)}">${esc(TIPO[p.tipo])}</span>${p.status === "reserved" ? '<span class="tag reserved">Reservado</span>' : ""}${p.status === "paused" ? '<span class="tag reserved">Pausada</span>' : ""}</div>
     <div class="body"><div class="title">${esc(p.title)}</div><div class="price">${esc(price)}</div>
-    <div class="muted small">${esc(p.condition)} · ${esc(p.author.name || "Usuario")}</div>
+    <div class="muted small">${esc(p.condition)} · ${esc(p.author.name || "Usuario")} ${badges(p.author, { compact: true })}</div>
     ${p.stats ? `<div class="row small muted" style="margin-top:6px;gap:10px;border-top:1px solid var(--border);padding-top:4px"><span title="Vistas">${icon("eye")} ${p.stats.views || 0}</span><span title="Contactos">${icon("chat")} ${p.stats.contacts || 0}</span><span title="Interesados">${icon("heart")} ${p.stats.interested || 0}</span></div>` : ""}
     </div></a>`;
 }

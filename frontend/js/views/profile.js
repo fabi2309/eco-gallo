@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { esc, icon, money, avatar, toast, timeAgo, TIPO, carreraOptions, bindCentro, pwField, wirePw, pwProblem } from "../ui.js";
+import { esc, icon, money, avatar, badges, toast, timeAgo, TIPO, carreraOptions, bindCentro, pwField, wirePw, pwProblem } from "../ui.js";
 import { state as appState } from "../main.js";
 import { card } from "./home.js";
 
@@ -23,14 +23,15 @@ async function mine(root) {
 async function profile(root, { state, refresh }) {
   const ctxRefresh = refresh;
   const u = state.user;
-  const [orders, w] = await Promise.all([api.get("/api/orders"), api.get("/api/wallet")]);
+  const w = await api.get("/api/wallet");
   const meta = state.meta;
   root.innerHTML = `
   <div style="max-width:720px;margin:0 auto" class="stack">
     <div class="row"><div class="avbox">${avatar(u, "big")}<label class="avedit" title="Cambiar foto" aria-label="Cambiar foto de perfil">${icon("camera")}<input type="file" id="avfile" accept="image/jpeg,image/png,image/webp" hidden></label></div>
       <div class="grow"><h1 style="font-size:1.6rem">${esc(u.name)}</h1><div class="muted">${esc(u.email)}</div>${u.bio ? `<div class="small bio">${esc(u.bio)}</div>` : ""}
         ${u.avatar ? '<button class="linkbtn" id="avdel">Quitar foto</button>' : ""}
-        ${u.kind === "egresado" ? `<span class="pill ok">${icon("shield")} Egresado verificado</span>` : ""}</div></div>
+        ${u.kind === "egresado" && !(u.badges && u.badges.egresado) ? `<span class="pill">${icon("shield")} Egresado · en revisión</span>` : ""}
+        <div class="insignias under">${badges(u)}</div></div></div>
     <div class="kpis"><div class="kpi"><div class="n">${money(w.available_cents)}</div><div class="muted small">Cobrado por ventas</div></div>
       <div class="kpi"><div class="n">${money(w.pending_cents)}</div><div class="muted small">Retenido, por liberar</div></div></div>
     <div class="panelbox stack"><h3>Mis datos</h3>
@@ -99,7 +100,8 @@ async function profile(root, { state, refresh }) {
       <div id="totp-message"></div>
     </div>
     <div class="panelbox stack"><h3>Historial de actividad</h3>
-      ${orders.orders.length ? `<div class="log">${orders.orders.slice(0, 8).map((o) => `<div><a href="#/order/${o.id}">${esc(o.post_title)}</a> · ${o.role === "buyer" ? "compra" : "venta"} · ${money(o.amount_cents)}<br><span class="muted">${esc(o.status)} · ${timeAgo(o.updated_at)}</span></div>`).join("")}</div>` : '<p class="muted">Todavía no hay movimientos.</p>'}</div>
+      <div class="tabs scroll" role="tablist" id="acttabs">${ACT_TABS.map(([k, l]) => `<button role="tab" data-k="${k}" aria-selected="${k === "todo"}">${l}</button>`).join("")}</div>
+      <div id="actbox" aria-live="polite"></div></div>
     <div class="row wrap"><a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
   </div>`;
   root.querySelector("#f").onsubmit = async (e) => {
@@ -113,6 +115,7 @@ async function profile(root, { state, refresh }) {
     try { const r = await api.form("POST", "/api/me/avatar", fd); appState.user.avatar = r.avatar; toast("Foto actualizada"); ctxRefresh(); } catch (er) { toast(er.message, true); }
   };
   root.querySelector("#avdel")?.addEventListener("click", async () => { await api.del("/api/me/avatar"); toast("Foto quitada"); ctxRefresh(); });
+  activity(root.querySelector("#acttabs"), root.querySelector("#actbox"));
     root.querySelector("#totp-start")?.addEventListener("click", async () => {
     const message = root.querySelector("#totp-message");
 
@@ -277,4 +280,45 @@ async function impact(root) {
       <div class="bars">${cats.length ? cats.map(([c, n]) => `<div class="bar"><span>${esc(c)}</span><i style="width:${(n / max) * 100}%"></i><b>${n}</b></div>`).join("") : '<p class="muted">Aún no hay datos.</p>'}</div></div>
     <p class="muted small">${esc(s.co2_note)} Dinero que cambió de manos por ventas completadas: ${money(s.money_cents)}.</p>
   </div>`;
+}
+
+// ---------------------------------------------------------------- historial de actividad (paginado)
+const ACT_TABS = [["todo", "Todo"], ["publicaciones", "Publicaciones"], ["compras", "Compras"], ["ventas", "Ventas"], ["mensajes", "Mensajes"]];
+const ORDER_LABEL = { HELD: "Pago retenido", DELIVERED: "Entregado, esperando confirmación", RELEASED: "Pago liberado", DISPUTED: "En disputa", REFUNDED: "Reembolsado" };
+const POST_LABEL = { pending: "En revisión", active: "Activa", paused: "Pausada", reserved: "Reservada", sold: "Entregada", removed: "Eliminada" };
+const ACT = {
+  publicacion: ["list", "Publicaste", (i) => POST_LABEL[i.detail] || i.detail, (i) => (i.amount ? money(i.amount) : "")],
+  compra: ["bag", "Compraste", (i) => ORDER_LABEL[i.detail] || i.detail, (i) => money(i.amount)],
+  venta: ["box", "Vendiste", (i) => ORDER_LABEL[i.detail] || i.detail, (i) => money(i.amount)],
+  mensaje_enviado: ["send", "Enviaste un mensaje", (i) => `Sobre «${i.detail || "publicación"}»`, () => ""],
+  mensaje_recibido: ["chat", "Recibiste un mensaje", (i) => `Sobre «${i.detail || "publicación"}»`, () => ""],
+};
+
+function activity(tabs, box) {
+  let kind = "todo", page = 1;
+  const load = async () => {
+    box.innerHTML = '<p class="muted">Cargando…</p>';
+    try {
+      const d = await api.get(`/api/activity?kind=${kind}&page=${page}`);
+      page = d.page;
+      if (!d.items.length) { box.innerHTML = '<p class="muted">Todavía no hay movimientos en esta sección.</p>'; return; }
+      box.innerHTML = `<div class="actlist">${d.items.map((i) => {
+        const [ic, verb, sub, amt] = ACT[i.kind];
+        const main = i.kind.startsWith("mensaje") ? `“${esc(i.title)}”` : esc(i.title);
+        return `<a class="act" href="${esc(i.link)}"><span class="ico">${icon(ic)}</span>
+          <div class="grow"><div class="tt">${main}</div><div class="muted small">${verb} · ${esc(sub(i))}${amt(i) ? " · " + amt(i) : ""} · ${timeAgo(i.ts)}</div></div></a>`;
+      }).join("")}</div>
+      <div class="pager"><button class="btn ghost sm" id="pp" ${page <= 1 ? "disabled" : ""}>← Anterior</button>
+        <span class="muted small">Página ${d.page} de ${d.pages} · ${d.total} movimiento(s)</span>
+        <button class="btn ghost sm" id="pn" ${page >= d.pages ? "disabled" : ""}>Siguiente →</button></div>`;
+      box.querySelector("#pp").onclick = () => { page--; load(); };
+      box.querySelector("#pn").onclick = () => { page++; load(); };
+    } catch (e) { box.innerHTML = `<div class="error" role="alert">${esc(e.message)}</div>`; }
+  };
+  tabs.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+    kind = b.dataset.k; page = 1;
+    tabs.querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", x === b));
+    load();
+  }));
+  load();
 }
