@@ -423,3 +423,4 @@ def close_post(pid):
             db.execute("UPDATE posts SET status='sold' WHERE id=?", (pid,))
             resp = jsonify({"ok": True})
     return resp
+

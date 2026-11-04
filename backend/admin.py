@@ -348,3 +348,4 @@ def moderate_post(pid):
         notify(db, post["author_id"], msg, f"#/post/{pid}" if action == "approve" else "#/mine")
 
     return jsonify({"ok": True, "status": new_status})
+
