@@ -118,7 +118,6 @@ def stripe_webhook():
 
     db = get_db()
 
-
     with tx(db):
         inserted = db.execute(
             """INSERT OR IGNORE INTO stripe_webhook_events
@@ -199,7 +198,6 @@ def stripe_webhook():
                     final_charge_id = None
 
                 safe_pi_id = str(payment_intent_id) if payment_intent_id else None
-
 
                 db.execute(
                     """UPDATE orders

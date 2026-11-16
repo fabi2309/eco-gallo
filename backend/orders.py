@@ -95,7 +95,6 @@ def _can_view(o, user):
     return user["role"] == "admin" or user["id"] in (o["buyer_id"], o["seller_id"])
 
 
-
 @bp.post("/orders")
 @login_required
 def create_order():
@@ -255,7 +254,6 @@ def create_order():
         )
 
 
-
 @bp.get("/orders")
 @login_required
 def list_orders():
@@ -386,7 +384,7 @@ def _act(oid, action):
                 o["amount_cents"],
             )
         else:
-            refund_id = provider.refund(
+            provider.refund(
                 oid,
                 o.get("stripe_payment_intent_id") or "",
                 o["amount_cents"],
@@ -533,6 +531,7 @@ def _refund(db, o, actor_id, event, note):
     )
 
     log_event(db, o["id"], actor_id, event, note)
+
 
 def _make(action):
     def view(oid):

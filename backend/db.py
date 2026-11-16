@@ -281,7 +281,6 @@ _CENTRO_RENAMES = {
 }
 
 
-
 def init_db():
     con = connect()
     con.executescript(SCHEMA)
@@ -344,7 +343,6 @@ def init_db():
         )
 
     con.close()
-
 
 
 @contextlib.contextmanager
