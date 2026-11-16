@@ -34,21 +34,34 @@ def move(db, order_id: int, allowed: tuple, to: str, **extra) -> dict:
 
 def actions_for(order: dict, user: dict) -> list[str]:
     st, acts = order["status"], []
-    if user["id"] == order["buyer_id"] and st in ("HELD", "DELIVERED"):
-        acts += ["confirm", "dispute"]
+
+    if user["id"] == order["buyer_id"]:
+        if st in ("HELD", "DELIVERED", "RELEASING"):
+            acts.append("confirm")
+        if st in ("HELD", "DELIVERED"):
+            acts.append("dispute")
+
     if user["id"] == order["seller_id"]:
         if st == "HELD":
             acts.append("deliver")
-        if st in ("HELD", "DELIVERED"):
+        if st in ("HELD", "DELIVERED", "REFUNDING"):
             acts.append("refund")
-    if user["role"] == "admin" and st == "DISPUTED":
-        acts += ["resolve_release", "resolve_refund"]
+
+    if user["role"] == "admin":
+        if st == "DISPUTED":
+            acts += ["resolve_release", "resolve_refund"]
+        elif st == "RELEASING":
+            acts.append("resolve_release")
+        elif st == "REFUNDING":
+            acts.append("resolve_refund")
+
     return acts
 
 
 SELECT_ORDER = """
 SELECT o.*, p.title AS post_title, p.tipo AS post_tipo,
        b.name AS buyer_name, s.name AS seller_name,
+       s.stripe_account_id AS seller_stripe_account_id,
        (SELECT filename FROM post_images WHERE post_id=p.id ORDER BY position,id LIMIT 1) AS image
 FROM orders o
 JOIN posts p ON p.id=o.post_id
@@ -86,44 +99,159 @@ def _can_view(o, user):
 @login_required
 def create_order():
     data = request.get_json(silent=True) or {}
+
     try:
         pid = int(data.get("post_id"))
     except (TypeError, ValueError):
         return api_error("Publicación inválida.")
+
     db = get_db()
     provider = get_provider()
-    result = None
+    is_stripe = provider.name == "stripe"
+
     with tx(db):
-        post = db.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+        post = db.execute(
+            "SELECT * FROM posts WHERE id=?", (pid,)
+        ).fetchone()
+
         if not post or post["status"] != "active":
-            result = api_error("Este artículo ya no está disponible.", 409)
-        elif post["tipo"] != "venta" or post["price_cents"] <= 0:
-            result = api_error("Solo las ventas usan pago protegido. Contacta al autor por mensaje.", 400)
-        elif post["author_id"] == g.user["id"]:
-            result = api_error("No puedes comprar tu propia publicación.", 400)
-        else:
-            # Reserva atómica: solo una persona puede comprar.
-            cur = db.execute(
-                "UPDATE posts SET status='reserved' WHERE id=? AND status='active'", (pid,)
+            return api_error(
+                "Este artículo ya no está disponible.", 409
             )
-            if cur.rowcount != 1:
-                result = api_error("Alguien más acaba de reservar este artículo.", 409)
-            else:
-                t = now()
-                ref = provider.hold(pid, post["price_cents"], g.user["email"])
-                cur = db.execute(
-                    """INSERT INTO orders(post_id,buyer_id,seller_id,amount_cents,status,payment_ref,
-                                          created_at,updated_at) VALUES(?,?,?,?, 'HELD', ?,?,?)""",
-                    (pid, g.user["id"], post["author_id"], post["price_cents"], ref, t, t),
-                )
-                oid = cur.lastrowid
-                log_event(db, oid, g.user["id"], "paid_held",
-                          "Pago realizado y retenido por ECO-GALLO hasta que confirmes la recepción.")
-                notify(db, post["author_id"],
-                       f"{g.user['name']} pagó «{post['title']}». El dinero está retenido: "
-                       "entrega el artículo y espera la confirmación.", f"#/order/{oid}")
-                result = jsonify({"ok": True, "id": oid}), 201
-    return result
+
+        if post["tipo"] != "venta" or post["price_cents"] <= 0:
+            return api_error(
+                "Solo las ventas usan pago protegido. Contacta al autor por mensaje.",
+                400,
+            )
+
+        if post["author_id"] == g.user["id"]:
+            return api_error(
+                "No puedes comprar tu propia publicación.", 400
+            )
+
+        cur = db.execute(
+            "UPDATE posts SET status='reserved' "
+            "WHERE id=? AND status='active'",
+            (pid,),
+        )
+
+        if cur.rowcount != 1:
+            return api_error(
+                "Alguien más acaba de reservar este artículo.", 409
+            )
+
+        t = now()
+
+        if is_stripe:
+            payment_ref = ""
+            status = "PENDING_PAYMENT"
+        else:
+            payment_ref = provider.hold(
+                pid, post["price_cents"], g.user["email"]
+            )
+            status = "HELD"
+
+        cur = db.execute(
+            """INSERT INTO orders(
+                post_id, buyer_id, seller_id, amount_cents,
+                status, payment_ref, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                pid,
+                g.user["id"],
+                post["author_id"],
+                post["price_cents"],
+                status,
+                payment_ref,
+                t,
+                t,
+            ),
+        )
+
+        oid = cur.lastrowid
+
+        if is_stripe:
+            log_event(
+                db,
+                oid,
+                g.user["id"],
+                "payment_pending",
+                "Orden creada. Esperando el pago mediante Stripe Checkout.",
+            )
+        else:
+            log_event(
+                db,
+                oid,
+                g.user["id"],
+                "paid_held",
+                "Pago realizado y retenido por ECO-GALLO hasta que confirmes la recepción.",
+            )
+            notify(
+                db,
+                post["author_id"],
+                f"{g.user['name']} pagó «{post['title']}». "
+                "El dinero está retenido: entrega el artículo y espera la confirmación.",
+                f"#/order/{oid}",
+            )
+
+    if not is_stripe:
+        return jsonify({"ok": True, "id": oid}), 201
+
+    try:
+        checkout = provider.start_checkout(
+            oid,
+            post["price_cents"],
+            g.user["email"],
+        )
+
+        if not checkout.get("checkout_url"):
+            raise RuntimeError("Stripe no devolvió una URL de Checkout.")
+
+        with tx(db):
+            db.execute(
+                """UPDATE orders
+                   SET payment_ref=?, stripe_session_id=?, updated_at=?
+                   WHERE id=? AND status='PENDING_PAYMENT'""",
+                (
+                    checkout["payment_ref"],
+                    checkout["session_id"],
+                    now(),
+                    oid,
+                ),
+            )
+
+        return jsonify({
+            "ok": True,
+            "id": oid,
+            "checkout_url": checkout["checkout_url"],
+        }), 201
+
+    except Exception:
+        with tx(db):
+            db.execute(
+                """UPDATE orders
+                   SET status='CANCELLED', updated_at=?
+                   WHERE id=? AND status='PENDING_PAYMENT'""",
+                (now(), oid),
+            )
+            db.execute(
+                "UPDATE posts SET status='active' "
+                "WHERE id=? AND status='reserved'",
+                (pid,),
+            )
+            log_event(
+                db,
+                oid,
+                g.user["id"],
+                "payment_failed",
+                "No se pudo iniciar la sesión de pago.",
+            )
+
+        return api_error(
+            "No se pudo iniciar el pago con Stripe. Inténtalo nuevamente.",
+            502,
+        )
 
 
 @bp.get("/orders")
@@ -147,75 +275,261 @@ def get_order(oid):
 
 
 def _act(oid, action):
-    """Ejecuta una acción del escrow dentro de una transacción."""
+    """Ejecuta las acciones de una orden sin mantener abierta una transacción durante llamadas a Stripe."""
     db = get_db()
     data = request.get_json(silent=True) or {}
     provider = get_provider()
     u = g.user
+
+    target_status = (
+        "RELEASING"
+        if action in ("confirm", "resolve_release")
+        else "REFUNDING"
+    )
+
+    payment_action = action in (
+        "confirm", "refund", "resolve_release", "resolve_refund"
+    )
+
     with tx(db):
-        row = db.execute(f"{SELECT_ORDER} WHERE o.id=?", (oid,)).fetchone()
+        row = db.execute(
+            f"{SELECT_ORDER} WHERE o.id=?", (oid,)
+        ).fetchone()
+
         if not row or not _can_view(dict(row), u):
             return api_error("Orden no encontrada.", 404)
+
         o = dict(row)
+
         if action not in actions_for(o, u):
-            return api_error("No puedes hacer esto en el estado actual de la orden.", 403)
+            return api_error(
+                "No puedes hacer esto en el estado actual de la orden.",
+                403,
+            )
+
         title = o["post_title"]
         link = f"#/order/{oid}"
-        try:
-            if action == "deliver":
-                move(db, oid, ("HELD",), "DELIVERED")
-                log_event(db, oid, u["id"], "delivered", "El vendedor indica que entregó el artículo.")
-                notify(db, o["buyer_id"],
-                       f"{o['seller_name']} marcó «{title}» como entregado. Si ya lo tienes, confirma la recepción.", link)
-            elif action == "confirm":
-                _release(db, o, provider, u["id"], "confirmed",
-                         "El comprador confirmó que recibió el artículo. Fondos liberados al vendedor.")
-                notify(db, o["seller_id"],
-                       f"{o['buyer_name']} confirmó la recepción de «{title}». Se liberó tu pago.", link)
-            elif action == "dispute":
-                reason = clean_text(data.get("reason"), 500)
-                if not reason or len(reason) < 10:
-                    return api_error("Cuéntanos qué pasó (mínimo 10 caracteres).")
-                move(db, oid, ("HELD", "DELIVERED"), "DISPUTED", dispute_reason=reason)
-                log_event(db, oid, u["id"], "disputed", reason)
-                notify(db, o["seller_id"], f"{o['buyer_name']} abrió una disputa en «{title}». "
-                       "El dinero sigue retenido mientras la administración revisa.", link)
-                for a in rows(db.execute("SELECT id FROM users WHERE role='admin'")):
-                    notify(db, a["id"], f"Nueva disputa en la orden #{oid} («{title}»).", "#/admin")
-            elif action == "refund":
-                _refund(db, o, provider, u["id"], "refunded_by_seller",
-                        "El vendedor devolvió el pago al comprador.")
-                notify(db, o["buyer_id"], f"Te devolvieron el pago de «{title}».", link)
-            elif action in ("resolve_release", "resolve_refund"):
-                note = clean_text(data.get("note"), 300, required=False) or ""
-                if action == "resolve_release":
-                    _release(db, o, provider, u["id"], "admin_released",
-                             f"La administración liberó el pago al vendedor. {note}".strip())
-                else:
-                    _refund(db, o, provider, u["id"], "admin_refunded",
-                            f"La administración devolvió el pago al comprador. {note}".strip())
-                for uid in (o["buyer_id"], o["seller_id"]):
-                    notify(db, uid, f"La administración resolvió la disputa de «{title}».", link)
-        except Conflict as e:
-            return api_error(str(e), 409)
+
+        if action == "deliver":
+            move(db, oid, ("HELD",), "DELIVERED")
+            log_event(
+                db, oid, u["id"], "delivered",
+                "El vendedor indica que entregó el artículo.",
+            )
+            notify(
+                db, o["buyer_id"],
+                f"{o['seller_name']} marcó «{title}» como entregado. "
+                "Si ya lo tienes, confirma la recepción.",
+                link,
+            )
+            return jsonify({"ok": True})
+
+        if action == "dispute":
+            reason = clean_text(data.get("reason"), 500)
+
+            if not reason or len(reason) < 10:
+                return api_error(
+                    "Cuéntanos qué pasó (mínimo 10 caracteres)."
+                )
+
+            move(
+                db, oid, ("HELD", "DELIVERED"),
+                "DISPUTED", dispute_reason=reason,
+            )
+            log_event(db, oid, u["id"], "disputed", reason)
+
+            notify(
+                db, o["seller_id"],
+                f"{o['buyer_name']} abrió una disputa en «{title}». "
+                "El dinero sigue retenido mientras la administración revisa.",
+                link,
+            )
+
+            for admin in rows(
+                db.execute("SELECT id FROM users WHERE role='admin'")
+            ):
+                notify(
+                    db, admin["id"],
+                    f"Nueva disputa en la orden #{oid} («{title}»).",
+                    "#/admin",
+                )
+
+            return jsonify({"ok": True})
+
+        if not payment_action:
+            return api_error("Acción no reconocida.", 400)
+
+        retrying = o["status"] == target_status
+        previous_status = None if retrying else o["status"]
+
+        if not retrying:
+            allowed = (
+                ("HELD", "DELIVERED")
+                if action in ("confirm", "refund")
+                else ("DISPUTED",)
+            )
+
+            try:
+                move(db, oid, allowed, target_status)
+            except Conflict as e:
+                return api_error(str(e), 409)
+
+    # La llamada externa se realiza fuera de la transacción SQLite.
+    try:
+        if target_status == "RELEASING":
+            transfer_id = provider.release(
+                oid,
+                o.get("stripe_charge_id") or "",
+                o.get("seller_stripe_account_id") or "",
+                o["amount_cents"],
+            )
+        else:
+            provider.refund(
+                oid,
+                o.get("stripe_payment_intent_id") or "",
+                o["amount_cents"],
+            )
+
+    except Exception:
+        # Si es el primer intento, restauramos el estado anterior.
+        # Si es un reintento, conservamos el estado temporal para
+        # permitir otro intento sin perder la operación pendiente.
+        with tx(db):
+            if not retrying:
+                db.execute(
+                    """UPDATE orders
+                       SET status=?, updated_at=?
+                       WHERE id=? AND status=?""",
+                    (previous_status, now(), oid, target_status),
+                )
+
+            log_event(
+                db,
+                oid,
+                u["id"],
+                "payment_operation_failed",
+                "No se pudo completar la operación de pago. "
+                "Se puede volver a intentar.",
+            )
+
+        return api_error(
+            "No se pudo completar la operación con Stripe. "
+            "La orden conserva su estado para permitir un reintento.",
+            502,
+        )
+
+    # Stripe respondió correctamente. Ahora confirmamos el resultado
+    # en la base de datos.
+    with tx(db):
+        current = db.execute(
+            f"{SELECT_ORDER} WHERE o.id=?", (oid,)
+        ).fetchone()
+
+        if not current or current["status"] != target_status:
+            return api_error(
+                "La operación de pago se procesó, pero el estado de "
+                "la orden cambió. Se requiere revisión.",
+                409,
+            )
+
+        o = dict(current)
+
+        if target_status == "RELEASING":
+            if action == "confirm":
+                event = "confirmed"
+                note = (
+                    "El comprador confirmó que recibió el artículo. "
+                    "Fondos liberados al vendedor."
+                )
+            else:
+                event = "admin_released"
+                note = (
+                    "La administración liberó el pago al vendedor. "
+                    + (
+                        clean_text(data.get("note"), 300, required=False)
+                        or ""
+                    )
+                ).strip()
+
+            _release(
+                db, o, transfer_id, u["id"], event, note
+            )
+
+            notify(
+                db, o["seller_id"],
+                f"{o['buyer_name']} confirmó la recepción de «{title}». "
+                "Se liberó tu pago.",
+                link,
+            )
+
+        else:
+            if action == "refund":
+                event = "refunded_by_seller"
+                note = "El vendedor devolvió el pago al comprador."
+            else:
+                event = "admin_refunded"
+                note = (
+                    "La administración devolvió el pago al comprador. "
+                    + (
+                        clean_text(data.get("note"), 300, required=False)
+                        or ""
+                    )
+                ).strip()
+
+            _refund(db, o, u["id"], event, note)
+
+            notify(
+                db, o["buyer_id"],
+                f"Te devolvieron el pago de «{title}».",
+                link,
+            )
+
+            if action == "resolve_refund":
+                notify(
+                    db, o["seller_id"],
+                    f"La administración resolvió la disputa de «{title}».",
+                    link,
+                )
+
     return jsonify({"ok": True})
 
 
-def _release(db, o, provider, actor_id, event, note):
-    move(db, o["id"], ("HELD", "DELIVERED", "DISPUTED"), "RELEASED")
-    provider.release(o["payment_ref"], "", o["amount_cents"])
-    db.execute(
-        "INSERT INTO wallet_entries(user_id,order_id,amount_cents,kind,created_at) VALUES(?,?,?,?,?)",
-        (o["seller_id"], o["id"], o["amount_cents"], "release", now()),
+def _release(db, o, transfer_id, actor_id, event, note):
+    move(
+        db, o["id"], ("RELEASING",), "RELEASED",
+        stripe_transfer_id=transfer_id or "",
     )
-    db.execute("UPDATE posts SET status='sold' WHERE id=?", (o["post_id"],))
+
+    db.execute(
+        """INSERT INTO wallet_entries(
+            user_id, order_id, amount_cents, kind, created_at
+        ) VALUES(?,?,?,?,?)""",
+        (
+            o["seller_id"],
+            o["id"],
+            o["amount_cents"],
+            "release",
+            now(),
+        ),
+    )
+
+    db.execute(
+        "UPDATE posts SET status='sold' WHERE id=?",
+        (o["post_id"],),
+    )
+
     log_event(db, o["id"], actor_id, event, note)
 
 
-def _refund(db, o, provider, actor_id, event, note):
-    move(db, o["id"], ("HELD", "DELIVERED", "DISPUTED"), "REFUNDED")
-    provider.refund(o["payment_ref"], o["amount_cents"])
-    db.execute("UPDATE posts SET status='active' WHERE id=? AND status='reserved'", (o["post_id"],))
+def _refund(db, o, actor_id, event, note):
+    move(db, o["id"], ("REFUNDING",), "REFUNDED")
+
+    db.execute(
+        """UPDATE posts SET status='active'
+           WHERE id=? AND status='reserved'""",
+        (o["post_id"],),
+    )
+
     log_event(db, o["id"], actor_id, event, note)
 
 
@@ -241,11 +555,11 @@ def wallet():
     ).fetchone()["s"]
     pending = db.execute(
         """SELECT COALESCE(SUM(amount_cents),0) s FROM orders
-           WHERE seller_id=? AND status IN ('HELD','DELIVERED','DISPUTED')""", (uid,)
+           WHERE seller_id=? AND status IN ('HELD','DELIVERED','DISPUTED','RELEASING','REFUNDING')""", (uid,)
     ).fetchone()["s"]
     held_buyer = db.execute(
         """SELECT COALESCE(SUM(amount_cents),0) s FROM orders
-           WHERE buyer_id=? AND status IN ('HELD','DELIVERED','DISPUTED')""", (uid,)
+           WHERE buyer_id=? AND status IN ('HELD','DELIVERED','DISPUTED','RELEASING','REFUNDING')""", (uid,)
     ).fetchone()["s"]
     return jsonify({"ok": True, "available_cents": released, "pending_cents": pending,
                     "buyer_held_cents": held_buyer})

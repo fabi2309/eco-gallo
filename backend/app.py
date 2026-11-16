@@ -1,3 +1,4 @@
+
 """ECO-GALLO UAA · backend Flask (escucha solo en 127.0.0.1; el gateway Java es la puerta)."""
 import logging
 import os
@@ -26,8 +27,21 @@ def create_app() -> Flask:
     from posts import bp as posts_bp
     from social import bp as social_bp
     from wishlist import bp as wishlist_bp
+    from connect import bp as connect_bp
+    from stripe_webhook import bp as stripe_webhook_bp
 
-    for bp in (auth_bp, posts_bp, orders_bp, social_bp, wishlist_bp, activity_bp, admin_bp):
+    # Registrar todos los módulos del proyecto, incluidos los de Stripe.
+    for bp in (
+        auth_bp,
+        posts_bp,
+        orders_bp,
+        connect_bp,
+        stripe_webhook_bp,
+        social_bp,
+        wishlist_bp,
+        activity_bp,
+        admin_bp,
+    ):
         app.register_blueprint(bp)
 
     from backups import start_backup_scheduler

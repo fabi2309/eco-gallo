@@ -27,10 +27,10 @@ CREATE TABLE IF NOT EXISTS users(
   email_verified INTEGER NOT NULL DEFAULT 1,
   verif_status TEXT NOT NULL DEFAULT 'approved',    -- approved | pending | rejected (solo egresados)
   bio TEXT NOT NULL DEFAULT '',
-  avatar TEXT NOT NULL DEFAULT '',                  -- nombre de archivo en uploads/
-  deleted_at INTEGER NOT NULL DEFAULT 0             -- >0: cuenta eliminada por un admin (datos anonimizados)
+  avatar TEXT NOT NULL DEFAULT '',
+  deleted_at INTEGER NOT NULL DEFAULT 0,
+  stripe_account_id TEXT NOT NULL DEFAULT ''
 );
-
 CREATE TABLE IF NOT EXISTS login_codes(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT NOT NULL,
@@ -108,6 +108,10 @@ CREATE TABLE IF NOT EXISTS orders(
   amount_cents INTEGER NOT NULL,
   status TEXT NOT NULL,
   payment_ref TEXT NOT NULL DEFAULT '',
+  stripe_session_id TEXT NOT NULL DEFAULT '',
+  stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
+  stripe_charge_id TEXT NOT NULL DEFAULT '',
+  stripe_transfer_id TEXT NOT NULL DEFAULT '',
   dispute_reason TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -116,7 +120,14 @@ CREATE INDEX IF NOT EXISTS ix_orders_buyer ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS ix_orders_seller ON orders(seller_id);
 -- Solo una orden "viva" por publicación.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_live_post ON orders(post_id)
-  WHERE status IN ('HELD','DELIVERED','DISPUTED');
+  WHERE status IN (
+    'PENDING_PAYMENT',
+    'HELD',
+    'DELIVERED',
+    'DISPUTED',
+    'RELEASING',
+    'REFUNDING'
+  );
 
 CREATE TABLE IF NOT EXISTS order_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,6 +136,12 @@ CREATE TABLE IF NOT EXISTS order_events(
   event TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stripe_webhook_events(
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  processed_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS wallet_entries(
@@ -240,8 +257,15 @@ _USER_MIGRATIONS = {
     "totp_pending_secret": "TEXT NOT NULL DEFAULT ''",
     "totp_pending_expires_at": "INTEGER NOT NULL DEFAULT 0",
     "totp_last_counter": "INTEGER NOT NULL DEFAULT -1",
+    "stripe_account_id": "TEXT NOT NULL DEFAULT ''",
 }
 
+_ORDER_MIGRATIONS = {
+    "stripe_session_id": "TEXT NOT NULL DEFAULT ''",
+    "stripe_payment_intent_id": "TEXT NOT NULL DEFAULT ''",
+    "stripe_charge_id": "TEXT NOT NULL DEFAULT ''",
+    "stripe_transfer_id": "TEXT NOT NULL DEFAULT ''",
+}
 
 # Nombres anteriores de centros -> nombres del catálogo oficial (bases ya existentes).
 _CENTRO_RENAMES = {
@@ -260,16 +284,64 @@ _CENTRO_RENAMES = {
 def init_db():
     con = connect()
     con.executescript(SCHEMA)
-    have = {r["name"] for r in con.execute("PRAGMA table_info(users)")}
+
+    con.execute("DROP INDEX IF EXISTS ux_orders_live_post")
+    con.execute("""
+        CREATE UNIQUE INDEX ux_orders_live_post ON orders(post_id)
+        WHERE status IN (
+            'PENDING_PAYMENT',
+            'HELD',
+            'DELIVERED',
+            'DISPUTED',
+            'RELEASING',
+            'REFUNDING'
+        )
+    """)
+
+    # Migraciones de usuarios.
+    have_users = {
+        r["name"] for r in con.execute("PRAGMA table_info(users)")
+    }
+
     for col, ddl in _USER_MIGRATIONS.items():
-        if col not in have:
-            con.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
-    have_posts = {r["name"] for r in con.execute("PRAGMA table_info(posts)")}
+        if col not in have_users:
+            con.execute(
+                f"ALTER TABLE users ADD COLUMN {col} {ddl}"
+            )
+
+    # Migraciones de órdenes y pagos Stripe.
+    have_orders = {
+        r["name"] for r in con.execute("PRAGMA table_info(orders)")
+    }
+
+    for col, ddl in _ORDER_MIGRATIONS.items():
+        if col not in have_orders:
+            con.execute(
+                f"ALTER TABLE orders ADD COLUMN {col} {ddl}"
+            )
+
+    # Migración de publicaciones.
+    have_posts = {
+        r["name"] for r in con.execute("PRAGMA table_info(posts)")
+    }
+
     if "views_count" not in have_posts:
-        con.execute("ALTER TABLE posts ADD COLUMN views_count INTEGER NOT NULL DEFAULT 0")
+        con.execute(
+            "ALTER TABLE posts ADD COLUMN views_count "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+
+    # Actualizar nombres anteriores de centros.
     for old, new in _CENTRO_RENAMES.items():
-        con.execute("UPDATE posts SET centro=? WHERE centro=?", (new, old))
-        con.execute("UPDATE users SET centro=? WHERE centro=?", (new, old))
+        con.execute(
+            "UPDATE posts SET centro=? WHERE centro=?",
+            (new, old)
+        )
+        con.execute(
+            "UPDATE users SET centro=? WHERE centro=?",
+            (new, old)
+        )
+
     con.close()
 
 
