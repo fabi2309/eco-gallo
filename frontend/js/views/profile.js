@@ -25,6 +25,13 @@ async function profile(root, { state, refresh }) {
   const u = state.user;
   const w = await api.get("/api/wallet");
   const meta = state.meta;
+  let connectStatus = null;
+
+try {
+  connectStatus = await api.get("/api/connect/status");
+} catch {
+  // Stripe todavía no está configurado o disponible.
+}
   root.innerHTML = `
   <div style="max-width:720px;margin:0 auto" class="stack">
     <div class="row"><div class="avbox">${avatar(u, "big")}<label class="avedit" title="Cambiar foto" aria-label="Cambiar foto de perfil">${icon("camera")}<input type="file" id="avfile" accept="image/jpeg,image/png,image/webp" hidden></label></div>
@@ -34,6 +41,18 @@ async function profile(root, { state, refresh }) {
         <div class="insignias under">${badges(u)}</div></div></div>
     <div class="kpis"><div class="kpi"><div class="n">${money(w.available_cents)}</div><div class="muted small">Cobrado por ventas</div></div>
       <div class="kpi"><div class="n">${money(w.pending_cents)}</div><div class="muted small">Retenido, por liberar</div></div></div>
+      <div class="panelbox stack" id="connect-panel">
+  <h3>Pagos y cuenta de vendedor</h3>
+  ${connectStatus === null
+  ? `<p class="muted small">Stripe no está configurado o disponible en este entorno.</p>`
+  : connectStatus.simulated
+    ? `<p class="muted small">Cuenta de vendedor simulada: lista para realizar pruebas. Los pagos se procesan en Stripe Test, pero las transferencias al vendedor son simuladas y no representan dinero enviado.</p>
+       <span class="pill">Modo de pruebas</span>`
+    : connectStatus.connected
+      ? `<p class="muted small">Tu cuenta de vendedor está conectada y habilitada para recibir transferencias.</p>`
+      : `<p class="muted small">Completa la verificación de Stripe para recibir pagos por tus ventas.</p>
+         <button class="btn" id="connect-start">Configurar pagos con Stripe</button>`}
+</div>
     <div class="panelbox stack"><h3>Mis datos</h3>
       <form id="f" class="stack">
         <label class="field">Nombre completo<input class="input" name="name" value="${esc(u.name)}" required minlength="3" maxlength="80"></label>
@@ -104,6 +123,23 @@ async function profile(root, { state, refresh }) {
       <div id="actbox" aria-live="polite"></div></div>
     <div class="row wrap"><a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
   </div>`;
+  root.querySelector("#connect-start")?.addEventListener("click", async () => {
+  const button = root.querySelector("#connect-start");
+  button.disabled = true;
+
+  try {
+    const result = await api.post("/api/connect/onboarding", {});
+
+    if (!result.url) {
+      throw new Error("Stripe no devolvió un enlace de registro.");
+    }
+
+    window.location.assign(result.url);
+  } catch (err) {
+    toast(err.message, true);
+    button.disabled = false;
+  }
+});
   root.querySelector("#f").onsubmit = async (e) => {
     e.preventDefault();
     try { const r = await api.put("/api/me", Object.fromEntries(new FormData(e.target))); appState.user = r.user; toast("Perfil actualizado"); } catch (err) { toast(err.message, true); }

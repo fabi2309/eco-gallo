@@ -106,8 +106,20 @@ export async function render(root, { args, state, go, refresh }) {
         confirm: "Pagar y retener",
       });
       if (!ok) return;
-      try { const r = await api.post("/api/orders", { post_id: p.id }); toast("Pago retenido. Coordina la entrega por mensaje."); go(`#/order/${r.id}`); }
-      catch (e) { toast(e.message, true); refresh(); }
+      try {
+  const r = await api.post("/api/orders", { post_id: p.id });
+
+  if (r.checkout_url) {
+    window.location.assign(r.checkout_url);
+    return;
+  }
+
+  toast("Pago retenido. Coordina la entrega por mensaje.");
+  go(`#/order/${r.id}`);
+} catch (e) {
+  toast(e.message, true);
+  refresh();
+}
     };
   } else if (p.status === "active") {
     act.innerHTML = `<a class="btn block" href="#/chat/${p.id}/${p.author.id}">${icon("chat")} Contactar para ${p.tipo === "donacion" ? "pedirlo" : "proponer un trueque"}</a>

@@ -161,7 +161,8 @@ body, h = multipart({**fields, "name": "Impostor"}, [("document", "k.pdf", pdf)]
 check(s == 409, "nadie puede pisar un registro pendiente de otra persona")
 s, r = ec.call("POST", "/api/auth/verify", {"email": em, "code": ecode}); check(s == 200 and r["needs_verification"], "confirma correo → entra, pero en revisión")
 s, r = ec.call("GET", "/api/posts"); check(s == 403 and r.get("needs_verification"), "egresado sin aprobar no ve el marketplace")
-s, r = ec.call("GET", "/api/me"); check(s == 200 and r["verification"]["status"] == "pending", "ve su solicitud pendiente")
+s, r = ec.call("GET", "/api/me")
+check(s == 200 and r.get("verification", {}).get("status") == "pending", "ve su solicitud pendiente")
 s, r = seller.call("GET", "/api/admin/verifications/1/file"); check(s == 403, "usuario normal no puede ver documentos")
 s, r = admin2.call("GET", "/api/admin/overview"); q = [v for v in r["verifications"] if v["email"] == em]
 check(s == 200 and len(q) == 1 and q[0]["is_pdf"], "admin ve la solicitud en su cola")

@@ -37,9 +37,38 @@ SMTP_PASS = os.environ.get("ECOGALLO_SMTP_PASS", "")
 SMTP_FROM = os.environ.get("ECOGALLO_SMTP_FROM", SMTP_USER or "ecogallo@localhost")
 SMTP_SSL = os.environ.get("ECOGALLO_SMTP_SSL", "0") == "1"  # 1 = SMTPS (465)
 
+# --- Stripe (pagos y Stripe Connect) ---
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+STRIPE_SUCCESS_URL = os.environ.get(
+    "STRIPE_SUCCESS_URL",
+    "http://localhost:8080/#/payment-success"
+)
+STRIPE_CANCEL_URL = os.environ.get(
+    "STRIPE_CANCEL_URL",
+    "http://localhost:8080/#/payment-cancel"
+)
+
+STRIPE_CONNECT_REFRESH_URL = os.environ.get(
+    "STRIPE_CONNECT_REFRESH_URL",
+    "http://localhost:8080/#/profile"
+)
+STRIPE_CONNECT_RETURN_URL = os.environ.get(
+    "STRIPE_CONNECT_RETURN_URL",
+    "http://localhost:8080/#/profile"
+)
+
+PAYMENT_PROVIDER = os.environ.get("PAYMENT_PROVIDER", "simulado").lower()
+
 # DEV: sin SMTP el código se imprime en la consola del servidor y, solo si
 # ECOGALLO_DEV=1, también se devuelve a la pantalla para poder probar.
 DEV = os.environ.get("ECOGALLO_DEV", "0") == "1"
+
+CONNECT_SIMULATED = (
+    DEV and os.environ.get("ECOGALLO_CONNECT_SIMULATED", "0") == "1"
+)
 
 # --- Reglas de acceso ---
 # Dominios que cuentan como "correo institucional" (se pueden cambiar sin tocar código):

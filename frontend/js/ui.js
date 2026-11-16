@@ -95,8 +95,13 @@ export function ask({ title, text = "", field = null, confirm = "Aceptar", dange
 
 export const TIPO = { venta: "Venta", trueque: "Trueque", donacion: "Donación" };
 export const STATUS = {
-  HELD: ["Pago retenido", ""], DELIVERED: ["Entregado · esperando confirmación", ""],
-  RELEASED: ["Pago liberado", "ok"], DISPUTED: ["En disputa", "bad"], REFUNDED: ["Reembolsado", "bad"],
+  PENDING_PAYMENT: ["Pago pendiente", "bad"],
+  HELD: ["Pago retenido", ""],
+  DELIVERED: ["Entregado · esperando confirmación", ""],
+  RELEASED: ["Pago liberado", "ok"],
+  DISPUTED: ["En disputa", "bad"],
+  REFUNDED: ["Reembolsado", "bad"],
+  CANCELLED: ["Compra cancelada", "bad"],
 };
 
 // ---------- Carrera (lista agrupada por centro; el centro sale de la carrera) ----------
