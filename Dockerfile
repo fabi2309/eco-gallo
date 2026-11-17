@@ -5,11 +5,6 @@ FROM python:3.11-slim
 LABEL maintainer="ECO-GALLO UAA" \
       description="Marketplace universitario de economía circular (UAA)"
 
-# Instalar dependencias del sistema necesarias
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # Copiar e instalar dependencias de Python primero (optimización de capas de caché)
@@ -22,6 +17,11 @@ COPY . .
 # Asegurar directorios de datos requeridos
 RUN mkdir -p data/uploads data/backups data/private/verificaciones
 
+RUN useradd --uid 10001 --create-home ecogallo && chown -R ecogallo:ecogallo /app/data
+USER ecogallo
+VOLUME ["/app/data"]
+HEALTHCHECK --interval=30s --timeout=5s CMD ["python", "tools/healthcheck.py"]
+
 # Exponer puerto HTTP estándar de la aplicación
 EXPOSE 8080
 
@@ -31,4 +31,4 @@ ENV PORT=8080 \
     PYTHONUNBUFFERED=1
 
 # Comando de arranque del servicio
-CMD ["python", "run_dev.py"]
+CMD ["python", "run_prod.py"]

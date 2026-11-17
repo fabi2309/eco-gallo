@@ -95,6 +95,9 @@ export function ask({ title, text = "", field = null, confirm = "Aceptar", dange
 
 export const TIPO = { venta: "Venta", trueque: "Trueque", donacion: "Donación" };
 export const STATUS = {
+  RELEASING: ["Confirmando transferencia", ""],
+  REFUNDING: ["Reembolso en proceso", ""],
+  PAYMENT_REVIEW: ["Pago en revisión administrativa", "bad"],
   PENDING_PAYMENT: ["Pago pendiente", "bad"],
   HELD: ["Pago retenido", ""],
   DELIVERED: ["Entregado · esperando confirmación", ""],

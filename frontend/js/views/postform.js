@@ -157,7 +157,7 @@ export async function render(root, { args, state, go }) {
     fd.append("price", st.tipo === "venta" ? st.price.replace(",", ".") : "");
     st.files.forEach((f) => fd.append("images", f, f.name));
     try {
-      if (editing) { await api.form("PUT", `/api/posts/${editing.id}`, fd); toast("Cambios guardados"); cleanup(); go(`#/post/${editing.id}`); }
+      if (editing) { await api.form("PUT", `/api/posts/${editing.id}`, fd); toast("Cambios guardados. Si cambiaste texto o fotos, se enviaron nuevamente a revisión."); cleanup(); go(`#/post/${editing.id}`); }
       else { const r = await api.form("POST", "/api/posts", fd); toast("Enviada a revisión: se mostrará cuando un administrador la apruebe"); cleanup(); go(`#/post/${r.id}`); }
     } catch (er) {
       err(er.message); btn.disabled = false; btn.textContent = editing ? "Guardar cambios" : "Publicar ahora";

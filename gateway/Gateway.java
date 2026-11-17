@@ -64,7 +64,7 @@ public class Gateway {
         client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NEVER).build();
 
-        String bind = System.getenv().getOrDefault("ECOGALLO_BIND", "0.0.0.0");
+        String bind = System.getenv().getOrDefault("ECOGALLO_BIND", "127.0.0.1");
         HttpServer server = HttpServer.create(new InetSocketAddress(bind, port), 128);
         server.createContext("/", Gateway::handle);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -112,7 +112,7 @@ public class Gateway {
     // ---------------------------------------------------------------- proxy
     static void proxy(HttpExchange ex) throws IOException, InterruptedException {
         String method = ex.getRequestMethod();
-        byte[] body = readLimited(ex.getRequestBody());
+        byte[] body = readLimited(ex.getRequestBody(), ex.getRequestURI().getPath().equals("/api/admin/backups/upload") ? 210L * 1024 * 1024 : MAX_BODY);
         if (body == null) { sendJson(ex, 413, "{\"ok\":false,\"message\":\"El archivo es demasiado grande.\"}"); return; }
 
         String q = ex.getRequestURI().getRawQuery();
@@ -122,9 +122,11 @@ public class Gateway {
             String k = h.getKey();
             if (k == null) continue;
             String lk = k.toLowerCase();
-            if (HOP.contains(lk) || lk.equals("x-real-ip") || lk.equals("x-forwarded-for")) continue;
+            if (HOP.contains(lk) || lk.equals("x-real-ip") || lk.equals("x-forwarded-for") || lk.equals("x-ecogallo-proxy")) continue;
             for (String v : h.getValue()) rb.header(k, v);
         }
+        String proxyToken = System.getenv().getOrDefault("ECOGALLO_PROXY_TOKEN", "");
+        if (!proxyToken.isEmpty()) rb.header("X-Ecogallo-Proxy", proxyToken);
         rb.header("X-Real-IP", clientIp(ex)); // el backend confía solo en este valor
         boolean hasBody = body.length > 0 || method.equals("POST") || method.equals("PUT") || method.equals("PATCH");
         rb.method(method, hasBody ? HttpRequest.BodyPublishers.ofByteArray(body) : HttpRequest.BodyPublishers.noBody());
@@ -142,14 +144,14 @@ public class Gateway {
         if (data.length > 0 && !method.equals("HEAD")) try (OutputStream os = ex.getResponseBody()) { os.write(data); }
     }
 
-    static byte[] readLimited(InputStream in) throws IOException {
+    static byte[] readLimited(InputStream in, long maxBody) throws IOException {
         ByteArrayOutputStream bo = new ByteArrayOutputStream();
         byte[] buf = new byte[16384];
         long total = 0;
         int n;
         while ((n = in.read(buf)) > 0) {
             total += n;
-            if (total > MAX_BODY) return null;
+            if (total > maxBody) return null;
             bo.write(buf, 0, n);
         }
         return bo.toByteArray();

@@ -180,12 +180,18 @@ def verify_totp(secret: str, code: str) -> bool:
 
 def client_ip() -> str:
     # El gateway Java sobrescribe X-Real-IP; el backend solo escucha en 127.0.0.1.
-    return request.headers.get("X-Real-IP") or request.remote_addr or ""
+    import os
+    proxy_token = os.environ.get("ECOGALLO_PROXY_TOKEN", "")
+    if proxy_token and hmac.compare_digest(request.headers.get("X-Ecogallo-Proxy", ""), proxy_token):
+        return request.headers.get("X-Real-IP") or request.remote_addr or ""
+    return request.remote_addr or ""
 
 
 # ---------------------------------------------------------------- correo
 def send_code_email(email: str, code: str) -> None:
     minutes = config.CODE_TTL_SECONDS // 60
+    if not config.SMTP_HOST and not config.DEV:
+        raise RuntimeError("Configura SMTP para enviar códigos de acceso.")
     if not config.SMTP_HOST:
         log.warning("[SIN SMTP] Código para %s: %s (vence en %s min)", email, code, minutes)
         print(f"\n  >>> ECO-GALLO código para {email}: {code}  (vence en {minutes} min)\n", flush=True)

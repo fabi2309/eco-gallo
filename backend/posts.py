@@ -11,7 +11,7 @@ import config
 from badges import BADGE_COLS, compute as compute_badges
 from db import get_db, now, rows, tx
 from security import api_error, clean_text, login_required
-from wishlist import notify_matches
+from pagination import pagination
 
 bp = Blueprint("posts", __name__, url_prefix="/api")
 
@@ -30,32 +30,48 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def drop_images(names):
+    for name in names:
+        (config.UPLOADS / name).unlink(missing_ok=True)
+
+
 def save_images(files) -> list[str] | tuple[None, str]:
-    saved: list[str] = []
+    from media import normalize_image
     files = [f for f in files if f and f.filename]
     if len(files) > config.MAX_IMAGES:
         return None, f"Máximo {config.MAX_IMAGES} imágenes."
+    normalized = []
     for f in files:
         data = f.read(config.MAX_IMAGE_BYTES + 1)
         if len(data) > config.MAX_IMAGE_BYTES:
             return None, "Cada imagen debe pesar menos de 5 MB."
-        ext = sniff_image(data)
-        if not ext:
-            return None, "Solo se permiten imágenes JPG, PNG o WebP."
-        name = f"{uuid.uuid4().hex}.{ext}"
-        (config.UPLOADS / name).write_bytes(data)
-        saved.append(name)
+        try:
+            data, ext = normalize_image(data)
+        except ValueError as exc:
+            return None, str(exc)
+        normalized.append((f"{uuid.uuid4().hex}.{ext}", data))
+    saved = []
+    try:
+        for name, data in normalized:
+            (config.UPLOADS / name).write_bytes(data)
+            saved.append(name)
+    except Exception:
+        drop_images(saved)
+        raise
     return saved
 
 
 def parse_price(raw) -> int | None:
     try:
-        value = Decimal(str(raw).replace(",", ".").strip() or "0")
-    except InvalidOperation:
+        text = str(raw).replace(",", ".").strip()
+        if len(text) > 40:
+            return None
+        value = Decimal(text or "0")
+        if not value.is_finite() or value < 0 or value > config.MAX_PRICE_CENTS / 100:
+            return None
+        return int((value * 100).to_integral_value())
+    except (InvalidOperation, ValueError, OverflowError):
         return None
-    if value < 0 or value.is_nan() or value.is_infinite():
-        return None
-    return int((value * 100).to_integral_value())
 
 
 def post_stats(db, post_id: int, author_id: int, views_count: int = 0, title: str = "",
@@ -121,6 +137,7 @@ def images_for(db, ids: list[int]) -> dict[int, list[str]]:
 @bp.get("/meta")
 def meta():
     return jsonify({
+        "payment_mode": "disabled" if config.PAYMENT_PROVIDER == "disabled" else "demo" if config.PAYMENT_PROVIDER == "simulado" else "live" if config.STRIPE_SECRET_KEY.startswith(("sk_live_", "rk_live_")) else "test",
         "categories": config.CATEGORIES, "centros": config.CENTROS, "tipos": config.TIPOS,
         "carreras": catalog.CENTROS_CARRERAS, "email_domains": list(config.EMAIL_DOMAINS),
         "password_min": config.PASSWORD_MIN, "doc_types": config.VERIF_DOC_TYPES,
@@ -155,12 +172,12 @@ def expand_query(term):
 def smart_search():
     """Buscador inteligente con sinónimos y tolerancia a errores (fuzzy search)."""
     db = get_db()
-    query = (request.args.get("q") or "").strip()
+    query = (request.args.get("q") or "").strip()[:80]
     if not query:
         return jsonify([])
 
     # 1. Obtener todas las publicaciones activas
-    posts_cursor = db.execute(f"{BASE_SELECT} WHERE p.status IN ('active','reserved')")
+    posts_cursor = db.execute(f"{BASE_SELECT} WHERE p.status IN ('active','reserved') ORDER BY p.id DESC LIMIT 500")
     posts = rows(posts_cursor)
 
     search_terms = expand_query(query)
@@ -190,6 +207,10 @@ def smart_search():
 @login_required
 def list_posts():
     db = get_db()
+    try:
+        page, size, offset = pagination()
+    except ValueError as exc:
+        return api_error(str(exc))
     where, args = [], []
     mine = request.args.get("mine") == "1"
     if mine:
@@ -231,7 +252,9 @@ def list_posts():
 
     order = {"nuevo": "p.id DESC", "barato": "p.price_cents ASC, p.id DESC",
              "caro": "p.price_cents DESC, p.id DESC"}.get(request.args.get("sort", "nuevo"), "p.id DESC")
-    posts = rows(db.execute(f"{BASE_SELECT} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT 100", args))
+    total = db.execute(f"SELECT COUNT(*) FROM posts p WHERE {' AND '.join(where)}", args).fetchone()[0]  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
+    posts = rows(db.execute(f"{BASE_SELECT} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?",
+                            [*args, size, offset]))
     imgs = images_for(db, [p["id"] for p in posts])
     is_mine = request.args.get("mine") == "1"
     out_posts = []
@@ -239,7 +262,8 @@ def list_posts():
         s = post_stats(db, p["id"], p["author_id"], p.get("views_count", 0),
                        p["title"], p["description"], p["category"], p["centro"]) if is_mine else None
         out_posts.append(serialize(p, imgs[p["id"]], stats=s))
-    return jsonify({"ok": True, "posts": out_posts})
+    return jsonify({"ok": True, "posts": out_posts, "page": page, "per_page": size, "total": total,
+                    "pages": max(1, (total + size - 1) // size)})
 
 
 @bp.get("/posts/<int:pid>")
@@ -247,7 +271,7 @@ def list_posts():
 def get_post(pid):
     db = get_db()
     row = db.execute(f"{BASE_SELECT} WHERE p.id=?", (pid,)).fetchone()
-    if not row or (row["status"] == "removed" and row["author_id"] != g.user["id"]
+    if not row or (row["status"] in ("removed", "pending") and row["author_id"] != g.user["id"]
                    and g.user["role"] != "admin"):
         return api_error("Publicación no encontrada.", 404)
     row = dict(row)
@@ -266,7 +290,7 @@ def get_post(pid):
 
     order = db.execute(
         """SELECT id, buyer_id, status FROM orders WHERE post_id=? AND status IN
-           ('HELD','DELIVERED','DISPUTED') LIMIT 1""", (pid,)
+           ('PENDING_PAYMENT','HELD','DELIVERED','DISPUTED','RELEASING','REFUNDING','PAYMENT_REVIEW') LIMIT 1""", (pid,)
     ).fetchone()
     if order and g.user["id"] in (order["buyer_id"], row["author_id"]):
         out["live_order"] = {"id": order["id"], "status": order["status"]}
@@ -313,18 +337,23 @@ def create_post():
     if isinstance(saved, tuple):
         return api_error(saved[1])
     db = get_db()
-    with tx(db):
-        cur = db.execute(
-            """INSERT INTO posts(author_id,title,description,category,centro,tipo,price_cents,
-                                 condition,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (g.user["id"], fields["title"], fields["description"], fields["category"],
-             fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], "pending", now()),
-        )
-        pid = cur.lastrowid
-        for i, name in enumerate(saved):
-            db.execute("INSERT INTO post_images(post_id,filename,position) VALUES(?,?,?)", (pid, name, i))
-        notify_matches(db, pid, g.user["id"], fields["title"], fields["description"],
-                       fields["category"], fields["centro"])
+    try:
+        with tx(db):
+            cur = db.execute(
+                """INSERT INTO posts(author_id,title,description,category,centro,tipo,price_cents,
+                                     condition,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (g.user["id"], fields["title"], fields["description"], fields["category"],
+                 fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], "pending", now()),
+            )
+            pid = cur.lastrowid
+            for i, name in enumerate(saved):
+                db.execute("INSERT INTO post_images(post_id,filename,position) VALUES(?,?,?)", (pid, name, i))
+            from security import notify
+            for admin in db.execute("SELECT id FROM users WHERE role='admin' AND suspended=0"):
+                notify(db, admin['id'], 'Hay una publicación pendiente de revisión.', '#/admin')
+    except Exception:
+        drop_images(saved)
+        raise
     return jsonify({"ok": True, "id": pid}), 201
 
 
@@ -335,7 +364,7 @@ def update_post(pid):
     post = db.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
     if not post or post["author_id"] != g.user["id"] or post["status"] == "removed":
         return api_error("Publicación no encontrada.", 404)
-    if post["status"] not in ("active", "paused"):
+    if post["status"] not in ("active", "paused", "pending"):
         return api_error("No puedes editar una publicación reservada o vendida.", 409)
     fields, err = _validate_fields(request.form)
     if err:
@@ -346,26 +375,41 @@ def update_post(pid):
         saved = save_images(new_imgs)
         if isinstance(saved, tuple):
             return api_error(saved[1])
-    with tx(db):
-        cur = db.execute(
-            """UPDATE posts SET title=?,description=?,category=?,centro=?,tipo=?,price_cents=?,
-                                condition=? WHERE id=? AND status IN ('active','paused')""",
-            (fields["title"], fields["description"], fields["category"], fields["centro"],
-             fields["tipo"], fields["price_cents"], fields["condition"], pid),
-        )
-        if cur.rowcount != 1:
-            raise RuntimeError("estado cambió")
-        if saved:
-            db.execute("DELETE FROM post_images WHERE post_id=?", (pid,))
-            for i, name in enumerate(saved):
-                db.execute("INSERT INTO post_images(post_id,filename,position) VALUES(?,?,?)", (pid, name, i))
-        # Notificar si baja de precio
-        old_price = post["price_cents"]
-        new_price = fields["price_cents"]
-        if post["tipo"] == "venta" and fields["tipo"] == "venta" and new_price < old_price:
-            from wishlist import notify_price_drop
-            notify_price_drop(db, pid, post["author_id"], fields["title"], fields["category"],
-                              fields["centro"], old_price, new_price, fields["description"])
+    changed_content = bool(saved) or any(fields[k] != post[k] for k in ("title", "description", "category", "centro", "tipo"))
+    next_status = "pending" if changed_content else post["status"]
+    old_images = []
+    try:
+        with tx(db):
+            cur = db.execute(
+                """UPDATE posts SET title=?,description=?,category=?,centro=?,tipo=?,price_cents=?,
+                                    condition=?,status=? WHERE id=? AND status IN ('active','paused','pending')""",
+                (fields["title"], fields["description"], fields["category"], fields["centro"],
+                 fields["tipo"], fields["price_cents"], fields["condition"], next_status, pid),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("estado cambió")
+            if saved:
+                old_images = [r[0] for r in db.execute("SELECT filename FROM post_images WHERE post_id=?", (pid,))]
+                db.execute("DELETE FROM post_images WHERE post_id=?", (pid,))
+                for i, name in enumerate(saved):
+                    db.execute("INSERT INTO post_images(post_id,filename,position) VALUES(?,?,?)", (pid, name, i))
+            # Notificar si baja de precio
+            old_price = post["price_cents"]
+            new_price = fields["price_cents"]
+            if next_status == "active" and post["tipo"] == "venta" and fields["tipo"] == "venta" and new_price < old_price:
+                from wishlist import notify_price_drop
+                db.execute("UPDATE posts SET approved_price_cents=? WHERE id=?", (new_price, pid))
+                notify_price_drop(db, pid, post["author_id"], fields["title"], fields["category"],
+                                  fields["centro"], old_price, new_price, fields["description"])
+            if changed_content:
+                from security import notify
+                for admin in db.execute("SELECT id FROM users WHERE role='admin' AND suspended=0"):
+                    notify(db, admin["id"], "Una publicación editada requiere revisión.", "#/admin")
+    except Exception:
+        drop_images(saved)
+        raise
+    if saved:
+        drop_images(old_images)
     return jsonify({"ok": True})
 
 

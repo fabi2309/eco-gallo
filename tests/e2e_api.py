@@ -12,6 +12,9 @@ class Client:
         self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
     def call(self, method, path, body=None, raw=None, headers=None):
         h = dict(headers or {})
+        if method not in ("GET", "HEAD"):
+            session = self.op.open(urllib.request.Request(BASE + "/api/me"))
+            h["X-CSRF-Token"] = json.loads(session.read()).get("csrf_token", "")
         data = raw
         if body is not None:
             data = json.dumps(body).encode(); h["Content-Type"] = "application/json"
@@ -82,7 +85,11 @@ def approve(pid):
     return pid
 
 print("Publicación")
-png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+import io
+from PIL import Image
+_png = io.BytesIO()
+Image.new("RGB", (2, 2), "green").save(_png, format="PNG")
+png = _png.getvalue()
 body, h = multipart({"title": "Libro de prueba", "description": "Descripción suficiente para la prueba.",
                      "category": "Libros", "centro": "Centro de Ciencias Básicas", "tipo": "venta", "price": "200",
                      "condition": "Usado"}, [("images", "a.png", png)])
@@ -203,6 +210,8 @@ body, h = multipart({"title": f"Filtro barato {tag} (editado)", "description": "
                      "centro": "Centro de Ciencias Básicas", "tipo": "venta", "condition": "Nuevo", "price": "55"})
 s, r = seller.call("PUT", f"/api/posts/{fp1}", raw=body, headers=h); check(s == 200, "se puede editar estando pausada")
 s, r = seller.call("POST", f"/api/posts/{fp1}/pause", {"paused": True}); check(s == 409, "no se pausa dos veces")
+approve(fp1)
+seller.call("POST", f"/api/posts/{fp1}/pause", {"paused": True})
 s, r = seller.call("POST", f"/api/posts/{fp1}/pause", {"paused": False}); check(s == 200 and r["status"] == "active", "reanuda")
 s, r = buyer.call("GET", f"/api/posts?q={tag}"); check(fp1 in [x["id"] for x in r["posts"]], "reanudada vuelve al catálogo")
 
@@ -211,7 +220,7 @@ s, r = seller.call("GET", "/api/me"); me_name = r["user"]["name"]; me_carrera = 
 s, r = seller.call("PUT", "/api/me", {"name": me_name, "carrera": me_carrera, "bio": "Vendo libros de ingeniería <b>baratos</b>."}); check(s == 200 and r["user"]["bio"].startswith("Vendo"), "guarda biografía")
 s, r = seller.call("PUT", "/api/me", {"name": me_name, "carrera": me_carrera}); check(r["user"]["bio"].startswith("Vendo"), "editar perfil sin mandar bio no la borra")
 body, h = multipart({}, [("avatar", "a.exe", b"MZ no soy imagen")]); s, r = seller.call("POST", "/api/me/avatar", raw=body, headers=h); check(s == 400, "avatar: rechaza archivos que no son imagen")
-body, h = multipart({}, [("avatar", "a.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64)]); s, r = seller.call("POST", "/api/me/avatar", raw=body, headers=h); check(s == 200 and r["avatar"].startswith("/uploads/avatar-"), "sube foto de perfil")
+body, h = multipart({}, [("avatar", "a.png", png)]); s, r = seller.call("POST", "/api/me/avatar", raw=body, headers=h); check(s == 200 and r["avatar"].startswith("/uploads/avatar-"), "sube foto de perfil")
 av = r["avatar"]
 s, r = buyer.call("GET", f"/api/posts/{fp1}"); check(r["post"]["author"]["avatar"] == av and "baratos" in r["post"]["author"]["bio"], "el comprador ve foto y bio del vendedor")
 s, r = seller.call("DELETE", "/api/me/avatar"); check(s == 200, "quita la foto")
@@ -284,6 +293,11 @@ uploaded_b_name = r["backup"]["filename"]
 s, r = admin2.call("DELETE", f"/api/admin/backups/{b_name}"); check(s == 200, "admin elimina respaldo")
 s, r = admin2.call("DELETE", f"/api/admin/backups/{uploaded_b_name}"); check(s == 200, "admin elimina respaldo subido")
 
+# Restoring revokes snapshot sessions. Log in again rather than reviving old credentials.
+_adm = admin2
+buyer = login(f"al{tag}b@edu.uaa.mx", "Comprador Prueba")
+other = login(f"al{tag}c@edu.uaa.mx", "Otro Comprador")
+ec = login(em, "Egresado Prueba")
 print("Métricas de publicación, favoritos y alertas de lista de deseos")
 # Seller vuelve a iniciar sesión
 seller = Client()
@@ -339,6 +353,7 @@ body, h = multipart({
 }, [("images", "fisica.png", png)])
 s, r = seller.call("PUT", f"/api/posts/{f_post_id}", raw=body, headers=h)
 check(s == 200, "seller actualiza publicación bajando el precio")
+approve(f_post_id)
 
 # Buyer revisa sus notificaciones y debe tener la alerta de bajó de precio
 s, r = buyer.call("GET", "/api/notifications")
@@ -382,9 +397,9 @@ vic_mail = f"victima{tag}@edu.uaa.mx"
 vic = login(vic_mail, "Víctima de Prueba")
 s, r = vic.call("GET", "/api/me"); vid_u = r["user"]["id"]
 vic.call("PUT", "/api/me", {"name": "Víctima de Prueba", "carrera": "Arquitectura", "bio": "Datos personales"})
-body, h = multipart({}, [("avatar", "a.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64)]); vic.call("POST", "/api/me/avatar", raw=body, headers=h)
+body, h = multipart({}, [("avatar", "a.png", png)]); vic.call("POST", "/api/me/avatar", raw=body, headers=h)
 body, h = multipart({"title": f"Pieza de víctima {tag}", "description": "Texto largo de la publicación.", "category": "Libros", "centro": "Centro de Ciencias Básicas",
-                     "tipo": "venta", "condition": "Usado", "price": "40"}, [("images", "f.png", b"\x89PNG\r\n\x1a\n" + b"1" * 64)])
+                     "tipo": "venta", "condition": "Usado", "price": "40"}, [("images", "f.png", png)])
 s, r = vic.call("POST", "/api/posts", raw=body, headers=h); vpost = r["id"]
 vic.call("POST", "/api/wishlist", {"term": f"cosa personal {tag}"})
 s, r = vic.call("POST", "/api/messages", {"post_id": fp1, "receiver_id": my_id, "content": "mi mensaje privado"}); check(s == 201, "la víctima envía un mensaje")

@@ -51,316 +51,273 @@ def rotate_backups():
             log.warning("No se pudo eliminar respaldo antiguo %s: %s", old.name, e)
 
 
-def create_backup(tag: str = "manual") -> dict:
-    """Genera un archivo .zip con la base de datos y todas las imágenes.
+MAX_ARCHIVE = 200 * 1024 * 1024
+MAX_UNPACKED = 128 * 1024 * 1024
 
-    Devuelve un diccionario con los detalles del respaldo creado.
-    """
+
+def _cipher():
+    import base64
+    import hashlib
+    from cryptography.fernet import Fernet
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(b'ecogallo-backup-v1:' + config.SECRET).digest()))
+
+
+def _safe_entries(zf):
+    total = 0
+    seen = set()
+    for item in zf.infolist():
+        path = pathlib.PurePosixPath(item.filename)
+        if (path.is_absolute() or '..' in path.parts or '\\' in item.filename or ':' in item.filename
+                or item.filename in seen or len(path.parts) > 10):
+            raise ValueError('El respaldo contiene rutas no seguras o repetidas.')
+        seen.add(item.filename)
+        total += item.file_size
+        if total > MAX_UNPACKED or item.file_size > MAX_UNPACKED:
+            raise ValueError('El respaldo supera el límite de tamaño descomprimido.')
+        if len(seen) > 20000:
+            raise ValueError('El respaldo contiene demasiados archivos.')
+    return total
+
+
+def _read_backup(path):
+    import io
+    from cryptography.fernet import InvalidToken
+    if path.stat().st_size > MAX_ARCHIVE:
+        raise ValueError('El respaldo supera el límite permitido.')
+    try:
+        with zipfile.ZipFile(path) as outer:
+            names = set(outer.namelist())
+            if names != {'meta.json', 'payload.enc'} or len(outer.namelist()) != 2:
+                raise ValueError('Se requiere un respaldo cifrado v2. Conserva los respaldos antiguos y migra desde su entorno original.')
+            if any(i.file_size > MAX_ARCHIVE for i in outer.infolist()):
+                raise ValueError('El respaldo supera el límite permitido.')
+            if outer.getinfo('meta.json').file_size > 65536:
+                raise ValueError('Metadatos demasiado grandes.')
+            meta = json.loads(outer.read('meta.json'))
+            raw = _cipher().decrypt(outer.read('payload.enc'))
+        with zipfile.ZipFile(io.BytesIO(raw)) as inner:
+            _safe_entries(inner)
+            if 'metadata.json' not in inner.namelist() or inner.getinfo('metadata.json').file_size > 65536:
+                raise ValueError('Faltan metadatos autenticados.')
+            if json.loads(inner.read('metadata.json')) != meta:
+                raise ValueError('Los metadatos del respaldo fueron alterados.')
+            if 'database/ecogallo.sqlite' not in inner.namelist():
+                raise ValueError('Falta la base de datos del respaldo.')
+            for item in inner.infolist():
+                if item.filename not in ('database/ecogallo.sqlite', 'metadata.json') and not item.filename.startswith(('uploads/', 'verificaciones/')):
+                    raise ValueError('El respaldo contiene archivos inesperados.')
+        return meta, raw
+    except InvalidToken:
+        raise ValueError('La clave del sistema no corresponde al respaldo o el archivo fue alterado. Recupera ECOGALLO_SECRET original.') from None
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError):
+        raise ValueError('El archivo no es un respaldo válido.') from None
+
+
+def _create_backup(tag='manual'):
+    import io
+    import uuid
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    stamp = now_dt.strftime('%Y%m%d_%H%M%S')
+    clean_tag = ''.join(c for c in str(tag)[:40] if c.isalnum() or c in ('-', '_')) or 'manual'
+    filename = f'ecogallo_backup_{stamp}_{clean_tag}_{uuid.uuid4().hex[:8]}.zip'
+    dest = config.BACKUPS_DIR / filename
     config.BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-    now_dt = datetime.datetime.now()
-    stamp = now_dt.strftime("%Y%m%d_%H%M%S")
-    clean_tag = "".join(c for c in tag if c.isalnum() or c in ("-", "_")) or "manual"
-    filename = f"ecogallo_backup_{stamp}_{clean_tag}.zip"
-    dest_path = config.BACKUPS_DIR / filename
-
-    db_stats = {"users": 0, "posts": 0, "orders": 0}
+    stats = {}
     uploads_count = 0
-    total_uncompressed = 0
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        temp_db = pathlib.Path(tmpdir) / "ecogallo.sqlite"
-
-        # 1. Copia segura y atómica de SQLite con sqlite3.backup
-        if config.DB_PATH.exists():
-            src = sqlite3.connect(config.DB_PATH)
-            dst = sqlite3.connect(temp_db)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close()
-                src.close()
-
-            # Leer estadísticas básicas desde la copia temporal
-            try:
-                con = sqlite3.connect(temp_db)
-                cur = con.cursor()
-                db_stats["users"] = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-                db_stats["posts"] = cur.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-                db_stats["orders"] = cur.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
-                con.close()
-            except Exception as ex:
-                log.warning("No se pudieron extraer estadísticas completas: %s", ex)
-
-        # 2. Empaquetar en archivo ZIP comprimido
-        with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            if temp_db.exists():
-                db_size = temp_db.stat().st_size
-                total_uncompressed += db_size
-                zf.write(temp_db, arcname="database/ecogallo.sqlite")
-
-            # Respaldar fotos y avatares de uploads/
-            if config.UPLOADS.exists():
-                for f in config.UPLOADS.rglob("*"):
-                    if f.is_file():
-                        uploads_count += 1
-                        total_uncompressed += f.stat().st_size
-                        rel = f.relative_to(config.UPLOADS)
-                        zf.write(f, arcname=f"uploads/{rel.as_posix()}")
-
-            # Respaldar documentos privados de verificación si los hay
-            if config.VERIF_DIR.exists():
-                for f in config.VERIF_DIR.rglob("*"):
-                    if f.is_file():
-                        total_uncompressed += f.stat().st_size
-                        rel = f.relative_to(config.VERIF_DIR)
-                        zf.write(f, arcname=f"verificaciones/{rel.as_posix()}")
-
-            # Metadatos del respaldo
-            meta = {
-                "system": "ECO-GALLO UAA",
-                "version": "1.0",
-                "created_at": now_dt.isoformat(),
-                "created_timestamp": int(now_dt.timestamp()),
-                "tag": clean_tag,
-                "stats": db_stats,
-                "files_count": uploads_count,
-                "uncompressed_bytes": total_uncompressed,
-            }
-            meta_bytes = json.dumps(meta, indent=2, ensure_ascii=False).encode("utf-8")
-            total_uncompressed += len(meta_bytes)
-            zf.writestr("meta.json", meta_bytes)
-
-    # 3. Aplicar rotación para no saturar el almacenamiento
-    rotate_backups()
-
-    size_bytes = dest_path.stat().st_size if dest_path.exists() else 0
-    info = {
-        "filename": filename,
-        "size_bytes": size_bytes,
-        "human_size": human_size(size_bytes),
-        "created_at": now_dt.isoformat(),
-        "created_timestamp": int(now_dt.timestamp()),
-        "tag": clean_tag,
-        "stats": db_stats,
-        "uploads_count": uploads_count,
-    }
-    log.info("Respaldo creado con éxito: %s (%s)", filename, info["human_size"])
-    return info
-
-
-def list_backups() -> list[dict]:
-    """Lista todos los respaldos existentes en config.BACKUPS_DIR."""
-    config.BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-    out = []
-    for p in config.BACKUPS_DIR.glob("ecogallo_backup_*.zip"):
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_db = pathlib.Path(tmp) / 'ecogallo.sqlite'
+        src = sqlite3.connect(config.DB_PATH)
+        dst = sqlite3.connect(temp_db)
         try:
-            st = p.stat()
-            meta = {}
-            with zipfile.ZipFile(p, "r") as zf:
-                if "meta.json" in zf.namelist():
-                    meta = json.loads(zf.read("meta.json").decode("utf-8"))
-            out.append({
-                "filename": p.name,
-                "size_bytes": st.st_size,
-                "human_size": human_size(st.st_size),
-                "created_at": meta.get("created_at") or datetime.datetime.fromtimestamp(st.st_mtime).isoformat(),
-                "created_timestamp": meta.get("created_timestamp") or int(st.st_mtime),
-                "tag": meta.get("tag", "manual"),
-                "stats": meta.get("stats", {}),
-                "uploads_count": meta.get("files_count", 0),
-            })
-        except Exception as e:
-            log.warning("No se pudo leer respaldo %s: %s", p.name, e)
-    out.sort(key=lambda b: b["created_timestamp"], reverse=True)
-    return out
+            src.backup(dst)
+            stats = {t: dst.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0] for t in ('users', 'posts', 'orders')}  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
+        finally:
+            src.close()
+            dst.close()
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(temp_db, 'database/ecogallo.sqlite')
+            for directory, prefix in ((config.UPLOADS, 'uploads'), (config.VERIF_DIR, 'verificaciones')):
+                for item in directory.rglob('*'):
+                    if item.is_symlink():
+                        raise ValueError('No se admiten enlaces simbólicos en los datos.')
+                    if item.is_file():
+                        zf.write(item, f'{prefix}/{item.relative_to(directory).as_posix()}')
+                        uploads_count += prefix == 'uploads'
+            _safe_entries(zf)
+        if raw.tell() > MAX_UNPACKED:
+            raise ValueError('El conjunto de datos supera el límite del respaldo integrado; usa el procedimiento externo.')
+        meta = {'version': 2, 'system': 'ECO-GALLO UAA', 'created_at': now_dt.isoformat(),
+                'created_timestamp': int(now_dt.timestamp()), 'tag': clean_tag, 'stats': stats,
+                'files_count': uploads_count}
+        with zipfile.ZipFile(raw, 'a', zipfile.ZIP_DEFLATED) as inner:
+            inner.writestr('metadata.json', json.dumps(meta))
+            _safe_entries(inner)
+        temporary = dest.with_suffix('.tmp')
+        try:
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_STORED) as outer:
+                outer.writestr('meta.json', json.dumps(meta))
+                outer.writestr('payload.enc', _cipher().encrypt(raw.getvalue()))
+            temporary.replace(dest)
+        finally:
+            temporary.unlink(missing_ok=True)
+    rotate_backups()
+    return {**meta, 'filename': filename, 'size_bytes': dest.stat().st_size,
+            'human_size': human_size(dest.stat().st_size), 'uploads_count': uploads_count}
 
 
-def get_backup_path(filename: str) -> pathlib.Path | None:
-    """Valida y obtiene la ruta absoluta de un archivo de respaldo."""
-    safe_name = pathlib.Path(filename).name
-    if not safe_name.endswith(".zip") or not safe_name.startswith("ecogallo_backup_"):
+def create_backup(tag='manual'):
+    from runtime import exclusive
+    with exclusive():
+        return _create_backup(tag)
+
+
+def list_backups():
+    out = []
+    for path in config.BACKUPS_DIR.glob('ecogallo_backup_*.zip'):
+        try:
+            with zipfile.ZipFile(path) as zf:
+                info = zf.getinfo('meta.json')
+                if info.file_size > 65536:
+                    continue
+                meta = json.loads(zf.read('meta.json'))
+            out.append({**meta, 'filename': path.name, 'size_bytes': path.stat().st_size,
+                        'human_size': human_size(path.stat().st_size), 'uploads_count': meta.get('files_count', 0)})
+        except (OSError, ValueError, zipfile.BadZipFile, KeyError):
+            log.warning('Respaldo no reconocido: %s', path.name)
+    return sorted(out, key=lambda b: b.get('created_timestamp', 0), reverse=True)
+
+
+def get_backup_path(filename):
+    if not isinstance(filename, str) or pathlib.Path(filename).name != filename or '/' in filename or '\\' in filename:
         return None
-    target = config.BACKUPS_DIR / safe_name
-    return target if target.exists() and target.is_file() else None
+    if not filename.startswith('ecogallo_backup_') or not filename.endswith('.zip'):
+        return None
+    target = config.BACKUPS_DIR / filename
+    if target.is_symlink():
+        return None
+    return target if target.is_file() else None
 
 
-def delete_backup(filename: str) -> bool:
-    """Elimina un respaldo específico."""
-    target = get_backup_path(filename)
-    if not target:
-        return False
-    target.unlink(missing_ok=True)
-    log.info("Respaldo eliminado manualmente: %s", filename)
+def delete_backup(filename):
+    from runtime import exclusive
+    with exclusive():
+        path = get_backup_path(filename)
+        if not path:
+            return False
+        path.unlink()
     return True
 
 
-def save_uploaded_backup(file_storage) -> dict:
-    """Valida y guarda un archivo de respaldo .zip subido por un administrador."""
-    config.BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-    now_dt = datetime.datetime.now()
-    stamp = now_dt.strftime("%Y%m%d_%H%M%S")
-    clean_tag = "subido"
-    filename = f"ecogallo_backup_{stamp}_{clean_tag}.zip"
-    dest_path = config.BACKUPS_DIR / filename
-
-    file_storage.save(dest_path)
-
-    if not zipfile.is_zipfile(dest_path):
-        dest_path.unlink(missing_ok=True)
-        raise ValueError("El archivo subido no es un archivo .zip válido.")
-
-    with zipfile.ZipFile(dest_path, "r") as zf:
-        namelist = zf.namelist()
-        if "database/ecogallo.sqlite" not in namelist:
-            dest_path.unlink(missing_ok=True)
-            raise ValueError("El archivo no contiene la base de datos de ECO-GALLO (database/ecogallo.sqlite).")
-
-    rotate_backups()
-    size_bytes = dest_path.stat().st_size
-    info = {
-        "filename": filename,
-        "size_bytes": size_bytes,
-        "human_size": human_size(size_bytes),
-        "created_at": now_dt.isoformat(),
-        "created_timestamp": int(now_dt.timestamp()),
-        "tag": clean_tag,
-    }
-    log.info("Respaldo subido y validado exitosamente: %s", filename)
-    return info
+def save_uploaded_backup(file_storage):
+    import uuid
+    from runtime import exclusive
+    with exclusive():
+        path = config.BACKUPS_DIR / f'ecogallo_backup_{uuid.uuid4().hex}_subido.zip'
+        try:
+            file_storage.save(path)
+            meta, _ = _read_backup(path)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        rotate_backups()
+        return {**meta, 'filename': path.name, 'size_bytes': path.stat().st_size, 'human_size': human_size(path.stat().st_size)}
 
 
-def restore_backup(filename: str, session_token: str | None = None, admin_user: dict | None = None) -> dict:
-    """Restaura de forma atómica y consistente el sistema desde un archivo de respaldo .zip.
-
-    1. Valida la integridad del archivo zip y previene ataques zip-slip.
-    2. Comprueba la integridad de la base de datos SQLite antes de tocar los datos activos.
-    3. Genera una copia preventiva del estado actual (tag: 'pre_restore').
-    4. Sobrescribe la base de datos activa usando sqlite3.Connection.backup.
-    5. Preserva la sesión del administrador para evitar desconexiones inesperadas.
-    6. Restaura los directorios de archivos multimedia y documentos de verificación.
-    """
-    target = get_backup_path(filename)
-    if not target:
-        raise FileNotFoundError(f"Archivo de respaldo no encontrado: {filename}")
-
-    if not zipfile.is_zipfile(target):
-        raise ValueError("El archivo seleccionado no es un respaldo .zip válido.")
-
-    with zipfile.ZipFile(target, "r") as zf:
-        # Validación de seguridad: evitar path traversal (zip slip)
-        for item in zf.infolist():
-            path_parts = pathlib.PurePosixPath(item.filename).parts
-            if pathlib.PurePosixPath(item.filename).is_absolute() or ".." in path_parts:
-                raise ValueError(f"El respaldo contiene una ruta no segura: {item.filename}")
-
-        if "database/ecogallo.sqlite" not in zf.namelist():
-            raise ValueError("El respaldo no contiene la base de datos del sistema (database/ecogallo.sqlite).")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            temp_db = pathlib.Path(tmpdir) / "restore_eval.sqlite"
-            temp_db.write_bytes(zf.read("database/ecogallo.sqlite"))
-
-            # Validar integridad interna de SQLite
-            con = sqlite3.connect(temp_db)
+def restore_backup(filename, session_token=None, admin_user=None):
+    import io
+    import shutil
+    from runtime import exclusive
+    import db as dbmod
+    with exclusive():
+        if not config.UPLOADS.resolve().is_relative_to(config.DATA.resolve()) or not config.VERIF_DIR.resolve().is_relative_to(config.DATA.resolve()):
+            raise ValueError("Los directorios de restauración deben permanecer dentro de ECOGALLO_DATA.")
+        path = get_backup_path(filename)
+        if not path:
+            raise FileNotFoundError('Respaldo no encontrado.')
+        meta, raw = _read_backup(path)
+        with tempfile.TemporaryDirectory(dir=config.DATA) as tmp:
+            stage = pathlib.Path(tmp)
+            for prefix in ('uploads', 'verificaciones'):
+                (stage / prefix).mkdir()
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                for item in zf.infolist():
+                    if item.is_dir():
+                        continue
+                    dest = (stage / item.filename).resolve()
+                    if not dest.is_relative_to(stage.resolve()):
+                        raise ValueError('Ruta de restauración no segura.')
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(zf.read(item))
+            candidate = stage / 'database' / 'ecogallo.sqlite'
+            con = sqlite3.connect(candidate)
             try:
-                cur = con.cursor()
-                res = cur.execute("PRAGMA integrity_check").fetchall()
-                if not res or res[0][0] != "ok":
-                    raise ValueError("La base de datos del respaldo no superó la prueba de integridad SQLite.")
-                tables = [r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-                if "users" not in tables or "posts" not in tables:
-                    raise ValueError("La base de datos del respaldo no contiene la estructura requerida de ECO-GALLO.")
-
-                db_stats = {
-                    "users": cur.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-                    "posts": cur.execute("SELECT COUNT(*) FROM posts").fetchone()[0],
-                    "orders": cur.execute("SELECT COUNT(*) FROM orders").fetchone()[0] if "orders" in tables else 0,
-                }
+                if con.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or con.execute('PRAGMA foreign_key_check').fetchone():
+                    raise ValueError('La base de datos no superó las comprobaciones de integridad.')
+                required = ('users', 'posts', 'orders', 'sessions', 'auth_challenges', 'stripe_webhook_events', 'post_images')
+                for table in required:
+                    con.execute(f'SELECT * FROM {table} LIMIT 0')  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
+                # Restoring an old snapshot over real financial activity can replay payouts.
+                active = sqlite3.connect(config.DB_PATH)
+                try:
+                    if active.execute("SELECT 1 FROM orders WHERE payment_provider='stripe' LIMIT 1").fetchone():
+                        raise ValueError('Hay historial de Stripe: la restauración requiere conciliación financiera fuera de línea.')
+                finally:
+                    active.close()
+                if con.execute("SELECT 1 FROM orders WHERE payment_provider='stripe' LIMIT 1").fetchone():
+                    raise ValueError('El respaldo tiene pagos Stripe. Usa la recuperación fuera de línea con conciliación financiera.')
+                # Revoke snapshot sessions and grants; preserve only the requesting admin if still an admin.
+                con.execute('DELETE FROM sessions')
+                con.execute('DELETE FROM auth_challenges')
+                con.execute('DELETE FROM login_codes')
+                if session_token and admin_user:
+                    from security import hash_token
+                    admin = con.execute("SELECT id FROM users WHERE email=? AND role='admin' AND suspended=0", (admin_user['email'],)).fetchone()
+                    if not admin:
+                        raise ValueError('El administrador actual no existe en el respaldo.')
+                    con.execute('INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)',
+                                (hash_token(session_token), admin[0], int(time.time()), int(time.time()) + config.SESSION_DAYS * 86400))
+                con.commit()
+            except sqlite3.Error:
+                raise ValueError('La estructura de la base de datos no es compatible.') from None
             finally:
                 con.close()
-
-            # Paso preventivo: crear respaldo del estado actual
-            pre_backup = create_backup(tag="pre_restore")
-            log.info("Copia de seguridad preventiva generada antes de restaurar: %s", pre_backup["filename"])
-
-            # Restaurar la base de datos SQLite en config.DB_PATH
-            src_conn = sqlite3.connect(temp_db)
-            dst_conn = sqlite3.connect(config.DB_PATH, timeout=30)
+            # Keep a durable undo snapshot and a local rollback copy before replacing anything.
+            pre = _create_backup('pre_restore')
+            dbmod.close_db()
+            old_db = stage / 'rollback.sqlite'
+            src = sqlite3.connect(config.DB_PATH)
+            dst = sqlite3.connect(old_db)
+            src.backup(dst)
+            src.close()
+            dst.close()
+            swapped = []
             try:
-                src_conn.backup(dst_conn)
-            finally:
-                dst_conn.close()
-                src_conn.close()
-
-            # Preservar la sesión del administrador actual si se proporcionó
-            if session_token and admin_user:
+                for live, prepared in ((config.UPLOADS, stage / 'uploads'), (config.VERIF_DIR, stage / 'verificaciones')):
+                    rollback = stage / (live.name + '_rollback')
+                    live.replace(rollback)
+                    swapped.append((live, rollback))
+                    prepared.replace(live)
+                src = sqlite3.connect(candidate)
+                dst = sqlite3.connect(config.DB_PATH)
                 try:
-                    from security import hash_token
-                    token_h = hash_token(session_token)
-                    admin_conn = sqlite3.connect(config.DB_PATH)
-                    try:
-                        row = admin_conn.execute(
-                            "SELECT id FROM users WHERE email=?", (admin_user.get("email"),)
-                        ).fetchone()
-                        if row:
-                            uid = row[0]
-                            now_t = int(time.time())
-                            admin_conn.execute(
-                                "INSERT OR REPLACE INTO sessions(token_hash, user_id, created_at, expires_at) VALUES(?,?,?,?)",
-                                (token_h, uid, now_t, now_t + config.SESSION_DAYS * 86400),
-                            )
-                            admin_conn.commit()
-                    finally:
-                        admin_conn.close()
-                except Exception as ex:
-                    log.warning("No se pudo reinsertar la sesión del administrador: %s", ex)
-
-            # Restaurar directorio de fotos (uploads/)
-            config.UPLOADS.mkdir(parents=True, exist_ok=True)
-            for p in config.UPLOADS.glob("*"):
-                if p.is_file():
-                    try:
-                        p.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
-            # Restaurar directorio de verificaciones privadas si existiera
-            config.VERIF_DIR.mkdir(parents=True, exist_ok=True)
-            for p in config.VERIF_DIR.glob("*"):
-                if p.is_file():
-                    try:
-                        p.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
-            uploads_restored = 0
-            for item in zf.infolist():
-                if item.is_dir():
-                    continue
-                parts = pathlib.PurePosixPath(item.filename).parts
-                if not parts:
-                    continue
-                if parts[0] == "uploads" and len(parts) > 1:
-                    dest = config.UPLOADS / pathlib.Path(*parts[1:])
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(zf.read(item.filename))
-                    uploads_restored += 1
-                elif parts[0] == "verificaciones" and len(parts) > 1:
-                    dest = config.VERIF_DIR / pathlib.Path(*parts[1:])
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(zf.read(item.filename))
-
-            # Ejecutar init_db para asegurar que migraciones y PRAGMAS queden activos
-            import db as dbmod
-            dbmod.init_db()
-
-    log.info("Restauración completada con éxito desde %s", filename)
-    return {
-        "filename": filename,
-        "pre_backup": pre_backup["filename"],
-        "stats": db_stats,
-        "uploads_restored": uploads_restored,
-    }
+                    src.backup(dst)
+                finally:
+                    src.close()
+                    dst.close()
+                dbmod.init_db()
+            except BaseException:
+                for live, rollback in reversed(swapped):
+                    if live.exists():
+                        shutil.rmtree(live)
+                    rollback.replace(live)
+                src = sqlite3.connect(old_db)
+                dst = sqlite3.connect(config.DB_PATH)
+                src.backup(dst)
+                src.close()
+                dst.close()
+                raise
+        return {'filename': filename, 'pre_backup': pre['filename'], 'stats': meta['stats'], 'uploads_restored': meta.get('files_count', 0)}
 
 
 def start_backup_scheduler():

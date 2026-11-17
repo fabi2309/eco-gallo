@@ -55,7 +55,7 @@ class SimulatedProvider(PaymentProvider):
         return None
 
     def refund(self, order_id, payment_intent_id, amount_cents):
-        return None
+        return {"id": "SIM-REFUND-" + str(order_id), "status": "succeeded"}
 
 
 class StripeProvider(PaymentProvider):
@@ -71,6 +71,7 @@ class StripeProvider(PaymentProvider):
 
         self.stripe = stripe
         self.stripe.api_key = config.STRIPE_SECRET_KEY
+        self.stripe.max_network_retries = 2
 
     def hold(self, order_id, amount_cents, buyer_email):
         """Crea Checkout; el webhook confirmará el pago."""
@@ -111,11 +112,9 @@ class StripeProvider(PaymentProvider):
                 },
                 "quantity": 1,
             }],
-            success_url=(
-                config.STRIPE_SUCCESS_URL
-                + "?session_id={CHECKOUT_SESSION_ID}"
-            ),
-            cancel_url=config.STRIPE_CANCEL_URL,
+            success_url=config.STRIPE_SUCCESS_URL + f"/{order_id}",
+            cancel_url=config.STRIPE_CANCEL_URL + f"/{order_id}",
+            payment_method_types=["card"],
             metadata={"order_id": str(order_id)},
             payment_intent_data={
                 "transfer_group": f"ORDER_{order_id}",
@@ -138,7 +137,8 @@ class StripeProvider(PaymentProvider):
     ):
 
         if (
-            config.CONNECT_SIMULATED
+            config.STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_"))
+            and config.CONNECT_SIMULATED
             and seller_account_id.startswith("SIM-CONNECT-")
         ):
             return f"SIM-TRANSFER-{order_id}"
@@ -157,6 +157,10 @@ class StripeProvider(PaymentProvider):
         if amount_cents <= 0:
             raise ValueError("El importe de la transferencia no es válido.")
 
+        existing = self.stripe.Transfer.list(transfer_group=f"ORDER_{order_id}", limit=100)
+        for transfer in existing.auto_paging_iter():
+            if (transfer.to_dict() if hasattr(transfer, "to_dict") else transfer)["metadata"].get("ecogallo_order_id") == str(order_id):
+                return transfer.id
         transfer = self.stripe.Transfer.create(
             amount=amount_cents,
             currency="mxn",
@@ -181,6 +185,10 @@ class StripeProvider(PaymentProvider):
         if amount_cents <= 0:
             raise ValueError("El importe del reembolso no es válido.")
 
+        existing = self.stripe.Refund.list(payment_intent=payment_intent_id, limit=100)
+        for refund in existing.auto_paging_iter():
+            if (refund.to_dict() if hasattr(refund, "to_dict") else refund)["metadata"].get("ecogallo_order_id") == str(order_id):
+                return {"id": refund.id, "status": refund.status}
         refund = self.stripe.Refund.create(
             payment_intent=payment_intent_id,
             amount=amount_cents,
@@ -190,16 +198,23 @@ class StripeProvider(PaymentProvider):
             idempotency_key=f"ecogallo-refund-{order_id}",
         )
 
-        return refund.id
+        return {"id": refund.id, "status": refund.status}
 
 
-def get_provider() -> PaymentProvider:
-    if config.PAYMENT_PROVIDER == "stripe":
+def get_provider(name=None) -> PaymentProvider:
+    name = name or config.PAYMENT_PROVIDER
+    if name == "stripe":
         return StripeProvider()
-
-    if config.PAYMENT_PROVIDER == "simulado":
+    if name == "simulado" and not config.PRODUCTION:
         return SimulatedProvider()
+    raise RuntimeError("Los pagos están deshabilitados o requieren completar la configuración.")
 
-    raise RuntimeError(
-        f"Proveedor de pagos no reconocido: {config.PAYMENT_PROVIDER}"
-    )
+
+def seller_ready(account_id):
+    if config.CONNECT_SIMULATED and config.STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_")):
+        return bool(account_id and account_id.startswith('SIM-CONNECT-'))
+    if not account_id or not account_id.startswith('acct_'):
+        return False
+    from connect import _stripe_client, _account_status
+    account = _stripe_client().v2.core.accounts.retrieve(account_id, {'include': ['configuration.recipient', 'requirements']})
+    return _account_status(account)['connected']

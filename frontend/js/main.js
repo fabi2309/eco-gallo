@@ -17,6 +17,7 @@ const routes = [
   [/^#\/?$/, home], [/^#\/post\/(\d+)$/, post], [/^#\/new$/, form], [/^#\/edit\/(\d+)$/, form],
   [/^#\/mine$/, me, "mine"], [/^#\/orders$/, orders], [/^#\/order\/(\d+)$/, orders],
   [/^#\/messages$/, chat], [/^#\/chat\/(\d+)\/(\d+)$/, chat], [/^#\/profile$/, me, "profile"],
+  [/^#\/payment-(?:success|cancel)\/(\d+)$/, orders],
   [/^#\/impact$/, me, "impact"], [/^#\/admin$/, admin], [/^#\/wishlist$/, wish],
 ];
 
@@ -28,6 +29,7 @@ const NAV = [
 export async function refreshUser() {
   const r = await api.get("/api/me");
   state.user = r.user;
+  state.passwordResetAllowed = !!r.password_reset_allowed;
   state.unreadMsgs = r.unread_messages || 0;
   state.unreadNotes = r.unread_notifications || 0;
   state.verification = r.verification || null;
@@ -39,6 +41,7 @@ function shell(path) {
   const badge = (n) => (n ? `<span class="badge">${n}</span>` : "");
   const nb = { "#/messages": badge(state.unreadMsgs) };
   app.innerHTML = `
+  ${state.meta.payment_mode !== "live" ? `<div class="payment-banner" role="status">${state.meta.payment_mode === "disabled" ? "Pagos en línea deshabilitados. Puedes publicar y contactar a otros usuarios." : state.meta.payment_mode === "demo" ? "Demostración: compras, saldos y reembolsos simulados. No se mueve dinero real." : "Stripe Test: usa únicamente datos de prueba. No se mueve dinero real."}</div>` : ""}
   <header class="topbar"><div class="in">
     <a class="brand" href="#/"><img src="/img/logo.svg" alt=""><span>ECO-GALLO <small>UAA</small></span></a>
     <nav class="topnav" aria-label="Principal">
@@ -87,7 +90,7 @@ async function toggleNotes(e) {
     : '<p class="muted" style="padding:16px">Aún no tienes notificaciones.</p>';
   box.addEventListener("click", () => box.remove());
   document.querySelector(".topbar").append(box);
-  if (state.unreadNotes) { await api.post("/api/notifications/read"); state.unreadNotes = 0; e.currentTarget.querySelector(".badge")?.remove(); }
+  if (state.unreadNotes) { const bell = e.currentTarget; await api.post("/api/notifications/read"); state.unreadNotes = 0; bell.querySelector(".badge")?.remove(); }
 }
 
 // Si ya estamos en "#/", cambiar el hash no dispara hashchange: hay que volver a pintar a mano.
@@ -104,7 +107,8 @@ async function route() {
     if (r.needs_profile) return login.renderProfile(app, { onDone: () => route() });
     if (r.needs_verification) return login.renderPending(app, { state, onLogout: logout, refresh: () => route() });
   } catch (e) {
-    app.innerHTML = `<main><div class="empty"><h2>No pudimos conectar</h2><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Reintentar</button></div></main>`;
+    app.innerHTML = `<main><div class="empty"><h2>No pudimos conectar</h2><p>${esc(e.message)}</p><button class="btn" id="retry-connection">Reintentar</button></div></main>`;
+    app.querySelector("#retry-connection")?.addEventListener("click", () => route());
     return;
   }
   if (hash === "#/login") { location.hash = "#/"; return; }

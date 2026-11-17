@@ -1,47 +1,19 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-   data/*
-   !data/.gitkeep
-   __pycache__/
-   gateway/out/
-   *.sqlite*
-   .env
-=======
-**/node_modules
->>>>>>> 1fc4a6df98e6d6636e07c039594a6755959c040f
-
-backend/__pycache__/
-data/ecogallo.sqlite
-data/secret.key
-data/uploads/
-gateway/out/
-=======
-# Datos generados por la aplicación (SQLite, sesiones, subidas)
 data/*
 !data/.gitkeep
-
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
 .venv/
 venv/
 ENV/
-
-# Java / Gateway
 gateway/out/
 *.class
-
-# Bases de datos y variables de entorno
 *.sqlite*
 .env
 .env.*
 !.env.example
-
-# Dependencias / editores
 **/node_modules/
+.pytest_cache/
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
->>>>>>> 6448480e9c0a0917369e22d8eb28948e8a2fb8a7

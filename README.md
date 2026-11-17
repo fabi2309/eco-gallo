@@ -1,96 +1,70 @@
 # ECO-GALLO UAA
 
-Marketplace universitario de economía circular (tesina ECO-GALLO). **Sin Angular, sin Node**:
+Marketplace universitario de economía circular: venta, trueque y donación de materiales entre estudiantes y egresados verificados.
 
-| Capa | Tecnología |
+## Ejecutar la demostración
+
+Python 3.11 o posterior. En Windows ejecuta `run_dev.bat`, que instala dependencias y abre el servidor en http://localhost:8080. También puedes usar:
+
+```powershell
+python -m pip install -r backend/requirements.txt
+$env:ECOGALLO_DEV="1"
+$env:ECOGALLO_SEED="1"
+$env:ECOGALLO_ADMINS="admin@edu.uaa.mx"
+python run_dev.py
+```
+
+Los códigos de acceso se muestran en pantalla solo en DEV. Accede con un correo institucional; la primera vez completa nombre y carrera. El administrador se asigna desde `ECOGALLO_ADMINS`. No hay una contraseña administrativa universal.
+
+**La demostración no cobra ni transfiere dinero y no pide RFC ni cuenta bancaria.** Sus saldos, compras y reembolsos son ficticios y están señalados. Es suficiente para probar el flujo completo de entrega, confirmación, disputas y devoluciones.
+
+Las variables se leen del entorno del proceso. `.env.example` es una plantilla; copiarla a `.env` no la carga automáticamente. Docker sí puede leer un archivo mediante `--env-file`.
+
+## Funciones
+
+- Acceso institucional por correo, contraseña y 2FA opcional con códigos de recuperación.
+- Restablecimiento de contraseña después de verificar correo y, si está activado, 2FA; autorización de 10 minutos y un solo uso.
+- Registro de egresados con revisión administrativa y documentos privados.
+- Publicación en tres pasos, hasta cinco fotografías, premoderación y nueva revisión al cambiar contenido o fotos; pausa y reanudación.
+- Catálogo con búsqueda, sugerencias, filtros, paginación, favoritos y lista de deseos con alertas de coincidencia o reducción de precio.
+- Perfil, fotografía, biografía, insignias e historial paginado.
+- Mensajes por publicación, notificaciones, reportes y puntos de encuentro.
+- Compras y ventas con estados protegidos, historial, disputas y resolución administrativa.
+- Panel administrativo con revisión de publicaciones, egresados, usuarios, reportes, operaciones financieras y gráficas locales accesibles.
+- Impacto de reutilización y estimaciones orientativas de CO₂e por categoría.
+- Respaldos cifrados, verificados y rotados; restauración con mantenimiento, copia preventiva y reversión ante fallas.
+
+## Pagos
+
+| Proveedor | Uso |
 |---|---|
-| Frontend | HTML + CSS + JavaScript nativo (módulos ES, sin build) — `frontend/` |
-| Gateway | **Java** puro (`com.sun.net.httpserver`): sirve el frontend, hace proxy a la API, cabeceras de seguridad y límite de ritmo en `/api/auth` — `gateway/Gateway.java` |
-| Backend | **Python / Flask** + SQLite — `backend/` |
+| `simulado` | Desarrollo sin dinero, RFC, datos bancarios ni claves. |
+| `disabled` | Marketplace operativo con contacto por mensajes y sin cobros en línea. Predeterminado en producción. |
+| `stripe` | Stripe Checkout y Connect; requiere claves, webhook y cuentas habilitadas. |
 
-## Arrancar
-### Opción 1: Con Gateway oficial (Java + Python)
-Requisitos: Python 3.10+, Java 17+ (probado con 21).
+La transferencia al banco real exige completar los requisitos de Stripe. El RFC depende del tipo de cuenta y las verificaciones solicitadas; el sistema no omite ni falsifica esos requisitos. Consulta [configuración, recuperación y límites de operación](docs/OPERACION.md).
 
-```bash
-./run.sh          # Linux / macOS      (Windows: run.bat)
-# abre http://localhost:8080
-```
-### Opción 2: Desarrollo rápido (100% Python, sin necesidad de Java)
-Si no tienes Java JDK instalado, puedes iniciar la aplicación completa directamente con Python:
-```bash
-pip install -r backend/requirements.txt
-python run_dev.py     # En Windows también puedes usar: run_dev.bat
-# abre http://localhost:8080
-```
+## Seguridad y despliegue
 
-Sin SMTP configurado, el código de acceso se imprime en la consola y se muestra en pantalla
-(`ECOGALLO_DEV=1`, solo desarrollo). Se cargan 8 publicaciones de demostración (`ECOGALLO_SEED=1`).
+El servidor de desarrollo y el gateway Java escuchan únicamente en loopback por defecto. Producción utiliza `run_prod.py` con Waitress sin depurador. El gateway Java opcional requiere **Java 21+** (`run.sh` o `run.bat`). La protección CSRF, las cabeceras y el límite de autenticación se aplican también en Python.
 
-## Acceso (tres caminos)
-| Quién | Cómo entra |
-|---|---|
-| **Estudiante** `@edu.uaa.mx` | Código de 6 dígitos al correo (vence en 10 min, un solo uso, 5 intentos, reenvío cada 45 s, 5 códigos/hora por correo). La primera vez se crea la cuenta y se pide nombre y **carrera** (lista). |
-| **Con contraseña** (cualquier cuenta) | Correo + contraseña, sin códigos. Se crea al registrarse (opcional) o después en *Perfil*. Mínimo 8 caracteres con letras y número; se guarda con hash scrypt; 5 fallos seguidos bloquean 15 min; cambiarla cierra las demás sesiones. «Olvidé mi contraseña» = entrar con código y fijar una nueva. |
-| **Egresado** | Se registra con **cualquier correo** + nombre + carrera + **kárdex o título** (imagen o PDF ≤ 6 MB) + contraseña. Confirma su correo con un código y queda **en revisión**: no ve el marketplace hasta que un admin lo apruebe en *Administración → Egresados por verificar*. Si lo rechazan, ve el motivo y puede subir otro documento. |
-
-Los documentos se guardan en `data/private/verificaciones/` (nunca en `/uploads`), solo los puede abrir un admin y **se borran al resolver** la solicitud.
-La sesión es una cookie `HttpOnly` + `SameSite=Lax`.
-
-**Para enviar correos reales** define:
-```
-ECOGALLO_SMTP_HOST=smtp.gmail.com  ECOGALLO_SMTP_PORT=587
-ECOGALLO_SMTP_USER=...  ECOGALLO_SMTP_PASS=...  ECOGALLO_SMTP_FROM="ECO-GALLO <...>"
-# SMTPS (465): ECOGALLO_SMTP_SSL=1
-```
-Con HTTPS en producción añade `ECOGALLO_SECURE=1`. `ECOGALLO_AUTH_LIMIT` (por defecto 30) = peticiones por minuto e IP a `/api/auth/*` en el gateway; súbelo si muchos usuarios comparten la misma IP (red del campus) o para correr las pruebas. Administradores: `ECOGALLO_ADMINS=correo1@edu.uaa.mx,correo2@edu.uaa.mx`.
-
-## Pago retenido (escrow)
-```
-Comprador paga ──► HELD (retenido) ──► DELIVERED (vendedor marca entregado, sigue retenido)
-                      │                         │
-                      └────── comprador confirma recepción ──► RELEASED (se libera al vendedor)
-                      └────── comprador abre disputa ──► DISPUTED ──► admin: RELEASED | REFUNDED
-                      └────── vendedor devuelve ──► REFUNDED
-```
-- **Solo el comprador** (o el admin en una disputa) puede liberar el dinero. No hay liberación automática por tiempo.
-- La reserva del artículo y los cambios de estado son atómicos (SQLite `BEGIN IMMEDIATE` + `UPDATE … WHERE status IN (…)`), así que no se puede pagar dos veces ni liberar dos veces.
-- Cada paso queda en un historial y genera notificaciones.
-- Solo las **ventas** usan escrow; trueques y donaciones se acuerdan por mensaje.
-- ⚠️ `backend/payments.py` trae un proveedor **simulado** (no mueve dinero ni pide tarjeta). Para producción implementa
-  `PaymentProvider` con una pasarela que soporte retención/captura diferida (Stripe Connect, Mercado Pago…).
-
-## Módulos (según la tesina)
-Autenticación (código, contraseña, egresados verificados) · Publicaciones (hasta 5 fotos; se pueden **pausar** y reanudar) · **Publicar en 3 pasos** con vista previa · **Zoom de imágenes** · **Insignias** «Egresado verificado» / «Vendedor verificado» · **Historial de actividad** paginado en el perfil ·
-Búsqueda y filtros (texto, categoría, tipo, centro, **estado del producto y rango de precio**) con **búsquedas recientes** ·
-**Lista de deseos** (aviso en la campana cuando alguien publica algo que coincide; se revisa cada 30 s) ·
-Perfil con **foto y biografía** · **Modo oscuro** · Mensajería por publicación
-con puntos de encuentro seguros · Notificaciones · Historial · Reportes · Panel de administración (disputas, reportes, usuarios, respaldos del sistema) ·
-Dashboard de impacto (CO₂e estimado por categoría).
+Producción exige HTTPS, cookies Secure, SMTP y un secreto persistente; rechaza DEV y simulación. No publiques directamente el servidor de desarrollo. Las instrucciones de proxy, Docker y respaldo están en [OPERACION.md](docs/OPERACION.md).
 
 ## Pruebas
-Arranca con `ECOGALLO_ADMINS=admin@edu.uaa.mx ./run.sh` y luego `python3 tests/e2e_api.py` (~165 comprobaciones: login, contraseñas, egresados, filtros, pausa, foto/bio, lista de deseos, escrow, disputas, permisos; tarda ~1 min por esperas de reenvío). Para no chocar con el límite del gateway: `ECOGALLO_AUTH_LIMIT=500 ./run.sh`.
+
+```powershell
+python -m pip install -r backend/requirements.txt -r requirements-dev.txt
+python -m pytest tests -q
+python -m flake8 backend tests --config=.flake8
+python -m bandit -r backend -ll -ii
+python -m pip_audit -r backend/requirements.txt
+python tests/run_e2e.py
+```
+
+Las pruebas automatizadas usan bases temporales. `run_e2e.py` arranca Waitress en un puerto local disponible y ejecuta la suite por HTTP real. Las pruebas Stripe usan respuestas controladas: no acreditan cobros ni transferencias reales. Los fallos financieros, firmas, duplicados, permisos y respaldos tienen pruebas de regresión.
 
 ## Estructura
-```
-backend/   app.py config.py db.py security.py auth.py posts.py orders.py payments.py social.py admin.py seed.py backups.py
-gateway/   Gateway.java
-frontend/  index.html css/app.css js/{main,api,ui}.js js/views/*.js
-data/      (se crea sola) base SQLite, fotos subidas y clave secreta
-run_dev.py / run_dev.bat   servidor local de desarrollo en Python (sin necesidad de Java)
-.env.example               plantilla con variables de entorno soportadas
-```
-## Centros y carreras
-`backend/catalog.py` es la única fuente (registro, perfil, filtros, publicaciones). El centro del usuario se deduce de su carrera.
-La lista se armó desde una fuente secundaria (el portal de la UAA bloquea la lectura automática): contrástala con
-https://www.uaa.mx/portal/oferta-educativa/licenciaturas/ y corrige ahí si cambia algo. Las bases existentes se migran solas (nombres de centro y columnas nuevas).
 
-### Insignias
-- **Egresado verificado**: egresado cuyo kárdex/título aprobó un administrador.
-- **Vendedor verificado**: correo institucional confirmado (o egresado aprobado) y al menos `ECOGALLO_VERIFIED_MIN_DEALS` (por defecto 1) venta liberada o entrega concluida.
+`backend/`: Flask y SQLite. `frontend/`: HTML/CSS/JavaScript nativo. `gateway/`: gateway Java opcional. `tests/`: pruebas. `data/`: datos persistentes excluidos de Git. `docs/`: operación y comprobaciones.
 
-### Correo institucional
-Solo `@alumnos.uaa.mx` y `@edu.uaa.mx` exactos crean cuenta de estudiante; subdominios y dominios parecidos se rechazan. Se cambia con `ECOGALLO_EMAIL_DOMAINS`.
-
-### Eliminar una cuenta (Admin)
-Administración → Usuarios → *Eliminar* (hay que escribir el correo exacto). La cuenta se anonimiza: se borran correo, nombre, foto, contraseña, 2FA, mensajes enviados, lista de deseos, favoritos, documentos de egresado y fotos de sus publicaciones. No permite eliminarse a uno mismo, a otro admin ni a quien tenga pagos retenidos.
+El catálogo de carreras vive en `backend/catalog.py` y debe contrastarse con la oferta oficial de la UAA cuando cambie. Las métricas de CO₂e son estimaciones, no mediciones certificadas.

@@ -48,7 +48,7 @@ def thread(post_id, other_id):
     uid = g.user["id"]
     post = db.execute("SELECT id, title, author_id, status, tipo, price_cents FROM posts WHERE id=?", (post_id,)).fetchone()
     other = db.execute("SELECT id, name, carrera, avatar FROM users WHERE id=?", (other_id,)).fetchone()
-    if not post or not other:
+    if not post or not other or (post["status"] == "pending" and post["author_id"] != uid and g.user["role"] != "admin"):
         return api_error("Conversación no encontrada.", 404)
     msgs = rows(db.execute(
         """SELECT id, sender_id, content, created_at FROM messages WHERE post_id=?
@@ -79,7 +79,7 @@ def send_message():
     uid = g.user["id"]
     post = db.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
     recv = db.execute("SELECT id FROM users WHERE id=? AND suspended=0", (receiver_id,)).fetchone()
-    if not post or post["status"] == "removed" or not recv or receiver_id == uid:
+    if not post or post["status"] in ("removed", "pending") or not recv or receiver_id == uid:
         return api_error("No se puede enviar este mensaje.", 400)
     # Un lado de la conversación debe ser el autor de la publicación.
     if uid != post["author_id"] and receiver_id != post["author_id"]:

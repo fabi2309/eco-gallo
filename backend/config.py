@@ -3,6 +3,11 @@ import os
 import pathlib
 import secrets
 
+PRODUCTION = os.environ.get("ECOGALLO_ENV", "development") == "production"
+PUBLIC_URL = os.environ.get("ECOGALLO_PUBLIC_URL", "").rstrip("/")
+AUTH_LIMIT = int(os.environ.get("ECOGALLO_AUTH_LIMIT", "60"))
+LIVE_PAYMENTS = os.environ.get("ECOGALLO_LIVE_PAYMENTS", "0") == "1"
+
 BASE = pathlib.Path(__file__).resolve().parent
 ROOT = BASE.parent
 
@@ -44,23 +49,23 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 STRIPE_SUCCESS_URL = os.environ.get(
     "STRIPE_SUCCESS_URL",
-    "http://localhost:8080/#/payment-success"
+    (PUBLIC_URL or "http://localhost:8080") + "/#/payment-success"
 )
 STRIPE_CANCEL_URL = os.environ.get(
     "STRIPE_CANCEL_URL",
-    "http://localhost:8080/#/payment-cancel"
+    (PUBLIC_URL or "http://localhost:8080") + "/#/payment-cancel"
 )
 
 STRIPE_CONNECT_REFRESH_URL = os.environ.get(
     "STRIPE_CONNECT_REFRESH_URL",
-    "http://localhost:8080/#/profile"
+    (PUBLIC_URL or "http://localhost:8080") + "/#/profile"
 )
 STRIPE_CONNECT_RETURN_URL = os.environ.get(
     "STRIPE_CONNECT_RETURN_URL",
-    "http://localhost:8080/#/profile"
+    (PUBLIC_URL or "http://localhost:8080") + "/#/profile"
 )
 
-PAYMENT_PROVIDER = os.environ.get("PAYMENT_PROVIDER", "simulado").lower()
+PAYMENT_PROVIDER = os.environ.get("PAYMENT_PROVIDER", "disabled" if PRODUCTION else "simulado").lower()
 
 # DEV: sin SMTP el código se imprime en la consola del servidor y, solo si
 # ECOGALLO_DEV=1, también se devuelve a la pantalla para poder probar.
@@ -138,3 +143,30 @@ BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_ENABLED = os.environ.get("ECOGALLO_BACKUP_ENABLED", "1") == "1"
 BACKUP_INTERVAL_HOURS = float(os.environ.get("ECOGALLO_BACKUP_INTERVAL_HOURS", "24"))
 BACKUP_KEEP = int(os.environ.get("ECOGALLO_BACKUP_KEEP", "7"))
+
+
+def validate_runtime():
+    if BACKUP_KEEP < 1:
+        raise RuntimeError("ECOGALLO_BACKUP_KEEP debe ser al menos 1.")
+    if PAYMENT_PROVIDER not in ("disabled", "simulado", "stripe"):
+        raise RuntimeError("Proveedor de pagos inválido.")
+    live_key = STRIPE_SECRET_KEY.startswith(("sk_live_", "rk_live_"))
+    if live_key and (not PRODUCTION or not LIVE_PAYMENTS or DEV or CONNECT_SIMULATED):
+        raise RuntimeError("Las claves live requieren habilitación explícita y desactivar simulación y DEV.")
+    if PRODUCTION:
+        if DEV or PAYMENT_PROVIDER == "simulado" or CONNECT_SIMULATED:
+            raise RuntimeError("No se permite modo de demostración en producción.")
+        if not COOKIE_SECURE or not PUBLIC_URL.startswith("https://"):
+            raise RuntimeError("Producción requiere HTTPS, ECOGALLO_PUBLIC_URL y ECOGALLO_SECURE=1.")
+        if not SMTP_HOST or not os.environ.get("ECOGALLO_SECRET") or len(SECRET) < 32:
+            raise RuntimeError("Producción requiere SMTP y ECOGALLO_SECRET persistente de al menos 32 caracteres.")
+    if PAYMENT_PROVIDER == "stripe":
+        if not STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_", "sk_live_", "rk_live_")):
+            raise RuntimeError("Falta una clave Stripe válida.")
+        if not STRIPE_WEBHOOK_SECRET:
+            raise RuntimeError("Stripe requiere STRIPE_WEBHOOK_SECRET.")
+        if PRODUCTION and not live_key:
+            raise RuntimeError("Stripe Test solo está permitido fuera de producción.")
+
+
+validate_runtime()

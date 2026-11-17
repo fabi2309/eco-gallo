@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+    config.validate_runtime()
     dbmod.init_db()
 
     from activity import bp as activity_bp
@@ -27,6 +28,7 @@ def create_app() -> Flask:
     from posts import bp as posts_bp
     from social import bp as social_bp
     from wishlist import bp as wishlist_bp
+    from reconciliation import bp as reconciliation_bp, start_scheduler
     from connect import bp as connect_bp
     from stripe_webhook import bp as stripe_webhook_bp
 
@@ -36,6 +38,7 @@ def create_app() -> Flask:
         posts_bp,
         orders_bp,
         connect_bp,
+        reconciliation_bp,
         stripe_webhook_bp,
         social_bp,
         wishlist_bp,
@@ -47,7 +50,16 @@ def create_app() -> Flask:
     from backups import start_backup_scheduler
     start_backup_scheduler()
 
+    from runtime import enter_request, leave_request, protect_request, response_headers
+    app.before_request(enter_request)
+    app.before_request(protect_request)
     app.before_request(load_user)
+    start_scheduler(app)
+    app.after_request(response_headers)
+    app.teardown_request(leave_request)
+    if config.PRODUCTION:
+        from urllib.parse import urlsplit
+        app.config["TRUSTED_HOSTS"] = [urlsplit(config.PUBLIC_URL).hostname]
     app.teardown_appcontext(dbmod.close_db)
 
     @app.get("/uploads/<path:name>")

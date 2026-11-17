@@ -1,3 +1,4 @@
+import { pager } from "../pagination.js";
 import { api } from "../api.js";
 import { esc, icon, money, badges, TIPO, CAT_ICON, countUp, store, toast } from "../ui.js";
 
@@ -6,7 +7,7 @@ export function card(p) {
   const price = p.tipo === "venta" ? money(p.price_cents) : TIPO[p.tipo];
   return `<a class="card" href="#/post/${p.id}">
     <div class="ph">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<div class="noimg">${icon("image")}</div>`}
-      <span class="tag ${esc(p.tipo)}">${esc(TIPO[p.tipo])}</span>${p.status === "reserved" ? '<span class="tag reserved">Reservado</span>' : ""}${p.status === "paused" ? '<span class="tag reserved">Pausada</span>' : ""}</div>
+      <span class="tag ${esc(p.tipo)}">${esc(TIPO[p.tipo])}</span>${p.status === "reserved" ? '<span class="tag reserved">Reservado</span>' : ""}${p.status === "pending" ? '<span class="tag reserved">En revisión</span>' : ""}${p.status === "paused" ? '<span class="tag reserved">Pausada</span>' : ""}</div>
     <div class="body"><div class="title">${esc(p.title)}</div><div class="price">${esc(price)}</div>
     <div class="muted small">${esc(p.condition)} · ${esc(p.author.name || "Usuario")} ${badges(p.author, { compact: true })}</div>
     ${p.stats ? `<div class="row small muted" style="margin-top:6px;gap:10px;border-top:1px solid var(--border);padding-top:4px"><span title="Vistas">${icon("eye")} ${p.stats.views || 0}</span><span title="Contactos">${icon("chat")} ${p.stats.contacts || 0}</span><span title="Interesados">${icon("heart")} ${p.stats.interested || 0}</span></div>` : ""}
@@ -67,17 +68,22 @@ export async function render(root, { state }) {
     <a class="btn accent fab" href="#/new">${icon("plus")} Publicar</a>`;
 
   let t;
-  const load = async () => {
+  let sequence = 0;
+  const load = async (page = 1) => {
+    const requestId = ++sequence;
     sessionStorage.setItem("eg_filters", JSON.stringify(f));
     const qs = new URLSearchParams({ q: f.q, category: f.category, tipo: f.tipo, centro: f.centro, sort: f.sort, condition: f.condition, min_price: f.min, max_price: f.max });
-    const { posts } = await api.get("/api/posts?" + qs);
+    qs.set("page", page);
+    const { posts, pages, total } = await api.get("/api/posts?" + qs);
+    if (requestId !== sequence) return;
     const list = root.querySelector("#list");
     if (!list) return;
-    const cnt = root.querySelector("#count"); if (cnt) cnt.textContent = posts.length ? `${posts.length} publicación${posts.length === 1 ? "" : "es"}` : "";
+    const cnt = root.querySelector("#count"); if (cnt) cnt.textContent = posts.length ? `${total} ${total === 1 ? "publicación" : "publicaciones"}` : "";
     list.innerHTML = posts.length
       ? `<div class="grid">${posts.map(card).join("")}</div>`
       : `<div class="empty">${icon("leaf")}<h2>No encontramos nada con esos filtros</h2><p>Prueba otra palabra, o pídenos que te avisemos cuando alguien lo publique.</p>
           <div class="row wrap" style="justify-content:center">${f.q.trim().length >= 2 ? `<button class="btn" id="watch">${icon("heart")} Avisarme cuando publiquen «${esc(f.q.trim().slice(0, 30))}»</button>` : ""}<button class="btn ghost" id="clear">Limpiar filtros</button><a class="btn ghost" href="#/new">Publicar un artículo</a></div></div>`;
+    pager(list, page, pages, load);
     list.querySelector("#clear")?.addEventListener("click", resetFilters);
     list.querySelector("#watch")?.addEventListener("click", async () => {
       try { await api.post("/api/wishlist", { term: f.q.trim(), category: f.category === "todos" ? "" : f.category, centro: f.centro === "todos" ? "" : f.centro }); toast("Listo: te avisaremos cuando alguien lo publique"); }

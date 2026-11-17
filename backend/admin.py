@@ -7,6 +7,8 @@ from db import get_db, now, rows, tx
 from orders import SELECT_ORDER, serialize as serialize_order
 from security import admin_required, api_error, clean_text, notify
 from social import impact_numbers
+from payment_states import OPEN_SQL, FUNDED_SQL
+from pagination import pagination
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -16,18 +18,23 @@ bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 def overview():
     db = get_db()
     disputes = [serialize_order(db, o, g.user, with_events=True) for o in rows(db.execute(
-        f"{SELECT_ORDER} WHERE o.status='DISPUTED' ORDER BY o.updated_at"))]
+        f"{SELECT_ORDER} WHERE o.status IN ('DISPUTED','RELEASING','REFUNDING','PAYMENT_REVIEW') ORDER BY o.updated_at"))]
     reports = rows(db.execute(
         """SELECT r.id, r.target_type, r.target_id, r.reason, r.created_at, u.name AS reporter,
                   CASE r.target_type WHEN 'post' THEN (SELECT title FROM posts WHERE id=r.target_id)
                        ELSE (SELECT email FROM users WHERE id=r.target_id) END AS target_label
            FROM reports r JOIN users u ON u.id=r.reporter_id WHERE r.status='open' ORDER BY r.id"""))
     held = db.execute(
-        "SELECT COALESCE(SUM(amount_cents),0) s, COUNT(*) c FROM orders WHERE status IN ('HELD','DELIVERED','DISPUTED')"
+        f"SELECT COALESCE(SUM(amount_cents),0) s, COUNT(*) c FROM orders WHERE status IN {FUNDED_SQL}"  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
     ).fetchone()
+    try:
+        page, size, offset = pagination()
+    except ValueError as exc:
+        return api_error(str(exc))
+    users_total = db.execute("SELECT COUNT(*) FROM users WHERE deleted_at=0").fetchone()[0]
     users = rows(db.execute(
         "SELECT id,email,name,carrera,centro,role,suspended,created_at,kind,verif_status "
-        "FROM users WHERE deleted_at=0 ORDER BY id DESC LIMIT 100"))
+        "FROM users WHERE deleted_at=0 ORDER BY id DESC LIMIT ? OFFSET ?", (size, offset)))
     verifications = rows(db.execute(
         """SELECT v.id, v.doc_type, v.filename, v.created_at, u.id AS user_id, u.name, u.email,
                   u.carrera, u.centro
@@ -38,7 +45,7 @@ def overview():
         v["is_pdf"] = v.pop("filename").lower().endswith(".pdf")
     return jsonify({"ok": True, "stats": impact_numbers(db), "disputes": disputes, "reports": reports,
                     "held": {"cents": held["s"], "orders": held["c"]}, "users": users,
-                    "verifications": verifications})
+                    "verifications": verifications, "page": page, "pages": max(1, (users_total + size - 1) // size)})
 
 
 @bp.get("/verifications/<int:vid>/file")
@@ -163,7 +170,7 @@ def delete_user(uid):
         elif confirm != u["email"]:
             resp = api_error("Escribe el correo exacto de la cuenta para confirmar.", 400)
         elif db.execute(
-                "SELECT 1 FROM orders WHERE (buyer_id=? OR seller_id=?) AND status IN ('HELD','DELIVERED','DISPUTED')",
+                f"SELECT 1 FROM orders WHERE (buyer_id=? OR seller_id=?) AND status IN {OPEN_SQL}",  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
                 (uid, uid)).fetchone():
             resp = api_error("Tiene pagos retenidos o en disputa. Resuélvelos antes de eliminar la cuenta.", 409)
         else:
@@ -184,7 +191,7 @@ def delete_user(uid):
                 """UPDATE users SET email=?, name='Cuenta eliminada', carrera='', centro='General', bio='', avatar='',
                    password_hash='', totp_enabled=0, totp_secret='', totp_pending_secret='',
                    totp_pending_expires_at=0, suspended=1, kind='estudiante', verif_status='approved', email_verified=0,
-                   failed_logins=0, locked_until=0, deleted_at=? WHERE id=?""",
+                   failed_logins=0, locked_until=0, stripe_account_id='', deleted_at=? WHERE id=?""",
                 (f"eliminado-{uid}@eliminado.invalid", now(), uid))
             resp = jsonify({"ok": True})
     _drop_avatar_file(avatar_name)
@@ -294,7 +301,7 @@ def admin_metrics():
 
     # 1. Usuarios registrados por mes
     users_by_month = db.execute(
-        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count FROM users GROUP BY month ORDER BY month ASC"
+        "SELECT strftime('%Y-%m', created_at, 'unixepoch') as month, COUNT(*) as count FROM users GROUP BY month ORDER BY month ASC"
     ).fetchall()
 
     # 2. Publicaciones por categoría
@@ -304,7 +311,7 @@ def admin_metrics():
 
     # 3. Transacciones / Órdenes por mes
     transactions = db.execute(
-        "SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count, SUM(amount_cents) as total FROM orders GROUP BY month ORDER BY month ASC"
+        "SELECT strftime('%Y-%m', created_at, 'unixepoch') as month, COUNT(*) as count, SUM(amount_cents) as total FROM orders GROUP BY month ORDER BY month ASC"
     ).fetchall()
 
     return jsonify({
@@ -344,6 +351,14 @@ def moderate_post(pid):
         new_status = "active" if action == "approve" else "removed"
         db.execute("UPDATE posts SET status=? WHERE id=?", (new_status, pid))
 
+        if action == "approve":
+            from wishlist import notify_price_drop
+            if post["tipo"] == "venta" and post["approved_price_cents"] > post["price_cents"]:
+                notify_price_drop(db, pid, post["author_id"], post["title"], post["category"], post["centro"],
+                                  post["approved_price_cents"], post["price_cents"], post["description"])
+            db.execute("UPDATE posts SET approved_price_cents=? WHERE id=?", (post["price_cents"], pid))
+            from wishlist import notify_matches
+            notify_matches(db, pid, post["author_id"], post["title"], post["description"], post["category"], post["centro"])
         msg = "¡Tu publicación fue aprobada y ya es visible en ECO-GALLO!" if action == "approve" else "Tu publicación fue rechazada por no cumplir con las normas de la comunidad."
         notify(db, post["author_id"], msg, f"#/post/{pid}" if action == "approve" else "#/mine")
 

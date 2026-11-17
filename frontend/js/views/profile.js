@@ -1,3 +1,4 @@
+import { pager } from "../pagination.js";
 import { api } from "../api.js";
 import { esc, icon, money, avatar, badges, toast, timeAgo, TIPO, carreraOptions, bindCentro, pwField, wirePw, pwProblem } from "../ui.js";
 import { state as appState } from "../main.js";
@@ -9,15 +10,16 @@ export async function render(root, ctx) {
   return profile(root, ctx);
 }
 
-async function mine(root) {
-  const { posts } = await api.get("/api/posts?mine=1");
-  const live = posts.filter((p) => ["active", "paused", "reserved"].includes(p.status));
+async function mine(root, page = 1) {
+  const { posts, pages } = await api.get(`/api/posts?mine=1&page=${page}`);
+  const live = posts.filter((p) => ["pending", "active", "paused", "reserved"].includes(p.status));
   const done = posts.filter((p) => p.status === "sold");
   root.innerHTML = `
     <div class="row"><h1 class="grow">Mis publicaciones</h1><a class="btn accent" href="#/new">${icon("plus")} Publicar</a></div>
     ${live.length ? `<div class="grid" style="margin-top:18px">${live.map(card).join("")}</div>`
       : `<div class="empty">${icon("list")}<h2>No tienes publicaciones activas</h2><p>Lo que ya no uses puede ayudar a otro estudiante.</p><a class="btn" href="#/new">Publicar mi primer artículo</a></div>`}
     ${done.length ? `<div class="sectionhd"><h2>Ya entregados</h2></div><div class="grid">${done.map(card).join("")}</div>` : ""}`;
+  pager(root, page, pages, (next) => mine(root, next));
 }
 
 async function profile(root, { state, refresh }) {
@@ -46,8 +48,7 @@ try {
   ${connectStatus === null
   ? `<p class="muted small">Stripe no está configurado o disponible en este entorno.</p>`
   : connectStatus.simulated
-    ? `<p class="muted small">Cuenta de vendedor simulada: lista para realizar pruebas. Los pagos se procesan en Stripe Test, pero las transferencias al vendedor son simuladas y no representan dinero enviado.</p>
-       <span class="pill">Modo de pruebas</span>`
+    ? `<p class="muted small">Demostración o Stripe Test: no se envía dinero real y no necesitas RFC ni cuenta bancaria para esta prueba.</p><span class="pill">Modo de pruebas</span>${!connectStatus.connected ? '<button class="btn" id="connect-start">Preparar vendedor de prueba</button>' : ""}`
     : connectStatus.connected
       ? `<p class="muted small">Tu cuenta de vendedor está conectada y habilitada para recibir transferencias.</p>`
       : `<p class="muted small">Completa la verificación de Stripe para recibir pagos por tus ventas.</p>
@@ -63,8 +64,9 @@ try {
         <button class="btn">Guardar cambios</button></form></div>
     <div class="panelbox stack"><h3>${u.has_password ? "Cambiar contraseña" : "Crear contraseña"}</h3>
       <p class="muted small">${u.has_password ? "Al cambiarla se cierran tus otras sesiones." : "Con una contraseña entras sin esperar códigos en tu correo."}</p>
+      ${state.passwordResetAllowed ? '<p class="notice">Acceso reciente verificado por correo: puedes restablecer tu contraseña durante 10 minutos.</p>' : ""}
       <form id="pw" class="stack" novalidate>
-        ${u.has_password ? pwField("current_password", "Contraseña actual", { autocomplete: "current-password" }) : ""}
+        ${u.has_password && !state.passwordResetAllowed ? pwField("current_password", "Contraseña actual", { autocomplete: "current-password" }) : ""}
         ${pwField("new_password", "Nueva contraseña", { hint: `(mín. ${meta.password_min}, letras y un número)` })}
         ${pwField("new_password2", "Repite la nueva contraseña")}
         <div id="pwerr"></div>
@@ -121,7 +123,7 @@ try {
     <div class="panelbox stack"><h3>Historial de actividad</h3>
       <div class="tabs scroll" role="tablist" id="acttabs">${ACT_TABS.map(([k, l]) => `<button role="tab" data-k="${k}" aria-selected="${k === "todo"}">${l}</button>`).join("")}</div>
       <div id="actbox" aria-live="polite"></div></div>
-    <div class="row wrap"><a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
+    <div class="row wrap">${u.role === "admin" ? '<a class="btn" href="#/admin">Administración</a>' : ""}<a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
   </div>`;
   root.querySelector("#connect-start")?.addEventListener("click", async () => {
   const button = root.querySelector("#connect-start");
@@ -130,6 +132,7 @@ try {
   try {
     const result = await api.post("/api/connect/onboarding", {});
 
+    if (result.simulated) { ctxRefresh(); return; }
     if (!result.url) {
       throw new Error("Stripe no devolvió un enlace de registro.");
     }

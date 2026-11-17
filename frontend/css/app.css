@@ -399,3 +399,8 @@ a.bell { display: inline-grid; place-items: center; text-decoration: none; }
 .erase { background: var(--rojo-bg); border-radius: var(--r-md); padding: 10px 12px; font-size: .9rem; }
 .erase ul { margin: 6px 0 0 18px; padding: 0; }
 .insignias-row { margin: 3px 0; }
+
+.payment-banner{padding:10px 18px;background:#fff3cd;color:#493b00;text-align:center;font-size:.9rem}
+.chart-row{display:grid;grid-template-columns:minmax(90px,1fr) 2fr auto;gap:10px;align-items:center;margin:10px 0;font-size:.85rem}
+.chart-bar{height:14px;background:var(--green,#1d5c3a);border-radius:4px;min-width:2px}
+.pager{display:flex;gap:12px;align-items:center;justify-content:center;margin:18px 0}
