@@ -2,12 +2,14 @@
 from flask import Blueprint, g, jsonify, request
 
 from db import get_db, now, rows, tx
-from payments import get_provider
+from payments import get_provider, seller_ready
+from pagination import pagination
+from payment_states import OPEN_STATES
 from security import api_error, clean_text, login_required, notify
 
 bp = Blueprint("orders", __name__, url_prefix="/api")
 
-LIVE = ("HELD", "DELIVERED", "DISPUTED")
+LIVE = OPEN_STATES
 
 
 class Conflict(Exception):
@@ -60,7 +62,7 @@ def actions_for(order: dict, user: dict) -> list[str]:
 
 SELECT_ORDER = """
 SELECT o.*, p.title AS post_title, p.tipo AS post_tipo,
-       b.name AS buyer_name, s.name AS seller_name,
+       b.name AS buyer_name, b.email AS buyer_email, s.name AS seller_name,
        s.stripe_account_id AS seller_stripe_account_id,
        (SELECT filename FROM post_images WHERE post_id=p.id ORDER BY position,id LIMIT 1) AS image
 FROM orders o
@@ -82,6 +84,9 @@ def serialize(db, o: dict, user: dict, with_events=False) -> dict:
         "dispute_reason": o["dispute_reason"], "payment_ref": o["payment_ref"],
         "created_at": o["created_at"], "updated_at": o["updated_at"],
         "actions": actions_for(o, user),
+        "payment_provider": o["payment_provider"],
+        "simulated": o["payment_provider"] == "simulado",
+        "checkout_url": o["checkout_url"] if o["buyer_id"] == user["id"] and o["status"] == "PENDING_PAYMENT" else None,
     }
     if with_events:
         out["events"] = rows(db.execute(
@@ -106,9 +111,19 @@ def create_order():
         return api_error("Publicación inválida.")
 
     db = get_db()
-    provider = get_provider()
+    try:
+        provider = get_provider()
+    except RuntimeError as exc:
+        return api_error(str(exc), 503)
     is_stripe = provider.name == "stripe"
 
+    if is_stripe:
+        seller = db.execute("SELECT u.stripe_account_id FROM users u JOIN posts p ON p.author_id=u.id WHERE p.id=? AND u.suspended=0", (pid,)).fetchone()
+        try:
+            if not seller or not seller_ready(seller[0]):
+                return api_error("El vendedor debe completar su cuenta de pagos antes de aceptar compras.", 409)
+        except Exception:
+            return api_error("No pudimos comprobar la cuenta del vendedor. Intenta más tarde.", 503)
     with tx(db):
         post = db.execute(
             "SELECT * FROM posts WHERE id=?", (pid,)
@@ -170,6 +185,7 @@ def create_order():
         )
 
         oid = cur.lastrowid
+        db.execute("UPDATE orders SET payment_provider=? WHERE id=?", (provider.name, oid))
 
         if is_stripe:
             log_event(
@@ -198,70 +214,97 @@ def create_order():
     if not is_stripe:
         return jsonify({"ok": True, "id": oid}), 201
 
+    row = dict(db.execute(f"{SELECT_ORDER} WHERE o.id=?", (oid,)).fetchone())
+    return checkout_response(row, 201)
+
+
+def ensure_checkout(o):
+    """Stable idempotency key recovers a lost Checkout response on the same order."""
+    provider = get_provider(o['payment_provider'])
+    checkout = None
+    if o.get('stripe_session_id'):
+        session = provider.stripe.checkout.Session.retrieve(o['stripe_session_id'])
+        if session.status != 'open':
+            raise RuntimeError('Checkout cerrado. Actualiza el estado de la compra.')
+        checkout = {'payment_ref': session.id, 'session_id': session.id, 'checkout_url': session.url}
+    elif now() - o['created_at'] > 60:
+        sessions = provider.stripe.checkout.Session.list(created={'gte': o['created_at'] - 5}, limit=100)
+        for session in sessions.auto_paging_iter():
+            if (session.to_dict() if hasattr(session, 'to_dict') else session)['metadata'].get('order_id') == str(o['id']):
+                checkout = {'payment_ref': session.id, 'session_id': session.id, 'checkout_url': session.url or ''}
+                break
+        if checkout is None and now() - o['created_at'] > 23 * 3600:
+            raise RuntimeError('Reserva antigua: requiere cancelar mediante conciliación.')
+    if checkout is None:
+        checkout = provider.start_checkout(o['id'], o['amount_cents'], o['buyer_email'])
+    if not checkout.get('checkout_url') or not checkout.get('session_id'):
+        raise RuntimeError('Checkout no disponible.')
+    db = get_db()
+    with tx(db):
+        db.execute("""UPDATE orders SET payment_ref=?, stripe_session_id=?, checkout_url=?, updated_at=?
+                      WHERE id=? AND status='PENDING_PAYMENT' AND (stripe_session_id='' OR stripe_session_id=?)""",
+                   (checkout['payment_ref'], checkout['session_id'], checkout['checkout_url'], now(), o['id'], checkout['session_id']))
+    return checkout
+
+
+def checkout_response(o, code=200):
     try:
-        checkout = provider.start_checkout(
-            oid,
-            post["price_cents"],
-            g.user["email"],
-        )
-
-        if not checkout.get("checkout_url"):
-            raise RuntimeError("Stripe no devolvió una URL de Checkout.")
-
-        with tx(db):
-            db.execute(
-                """UPDATE orders
-                   SET payment_ref=?, stripe_session_id=?, updated_at=?
-                   WHERE id=? AND status='PENDING_PAYMENT'""",
-                (
-                    checkout["payment_ref"],
-                    checkout["session_id"],
-                    now(),
-                    oid,
-                ),
-            )
-
-        return jsonify({
-            "ok": True,
-            "id": oid,
-            "checkout_url": checkout["checkout_url"],
-        }), 201
-
+        checkout = ensure_checkout(o)
+        return jsonify({'ok': True, 'id': o['id'], 'checkout_url': checkout['checkout_url']}), code
     except Exception:
-        with tx(db):
-            db.execute(
-                """UPDATE orders
-                   SET status='CANCELLED', updated_at=?
-                   WHERE id=? AND status='PENDING_PAYMENT'""",
-                (now(), oid),
-            )
-            db.execute(
-                "UPDATE posts SET status='active' "
-                "WHERE id=? AND status='reserved'",
-                (pid,),
-            )
-            log_event(
-                db,
-                oid,
-                g.user["id"],
-                "payment_failed",
-                "No se pudo iniciar la sesión de pago.",
-            )
+        # Result is uncertain: keep the reservation and recover this exact order.
+        return api_error('No se pudo abrir el pago. Puedes reintentarlo desde Compras y ventas.', 502, id=o['id'])
 
-        return api_error(
-            "No se pudo iniciar el pago con Stripe. Inténtalo nuevamente.",
-            502,
-        )
+
+@bp.post('/orders/<int:oid>/checkout')
+@login_required
+def resume_checkout(oid):
+    row = get_db().execute(f"{SELECT_ORDER} WHERE o.id=? AND o.buyer_id=?", (oid, g.user['id'])).fetchone()
+    if not row or row['status'] != 'PENDING_PAYMENT':
+        return api_error('No hay un pago pendiente para continuar.', 409)
+    return checkout_response(dict(row))
+
+
+@bp.post('/orders/<int:oid>/cancel')
+@login_required
+def cancel_checkout(oid):
+    db = get_db()
+    row = db.execute(f"{SELECT_ORDER} WHERE o.id=? AND o.buyer_id=?", (oid, g.user['id'])).fetchone()
+    if not row or row['status'] != 'PENDING_PAYMENT':
+        return api_error('La compra ya no se puede cancelar.', 409)
+    try:
+        o = dict(row)
+        checkout = ensure_checkout(o)
+        provider = get_provider(o['payment_provider'])
+        session = provider.stripe.checkout.Session.retrieve(checkout['session_id'])
+        if session.status == 'complete' or session.payment_status == 'paid':
+            return api_error('El pago ya se procesó. Actualiza la orden.', 409)
+        if session.status != 'expired':
+            provider.stripe.checkout.Session.expire(session.id)
+        with tx(db):
+            current = db.execute('SELECT status FROM orders WHERE id=?', (oid,)).fetchone()
+            if current['status'] == 'PENDING_PAYMENT':
+                move(db, oid, ('PENDING_PAYMENT',), 'CANCELLED')
+                db.execute("UPDATE posts SET status='active' WHERE id=? AND status='reserved'", (o['post_id'],))
+                log_event(db, oid, g.user['id'], 'cancelled', 'Checkout cancelado sin cobrar.')
+        return jsonify({'ok': True})
+    except Exception:
+        return api_error('No se pudo confirmar la cancelación. El artículo sigue reservado para evitar un doble cobro.', 502)
 
 
 @bp.get("/orders")
 @login_required
 def list_orders():
     db = get_db()
+    try:
+        page, size, offset = pagination()
+    except ValueError as exc:
+        return api_error(str(exc))
+    total = db.execute("SELECT COUNT(*) FROM orders WHERE buyer_id=? OR seller_id=?", (g.user['id'], g.user['id'])).fetchone()[0]
     rs = rows(db.execute(
-        f"{SELECT_ORDER} WHERE o.buyer_id=? OR o.seller_id=? ORDER BY o.id DESC LIMIT 100",
-        (g.user["id"], g.user["id"])))
-    return jsonify({"ok": True, "orders": [serialize(db, o, g.user) for o in rs]})
+        f"{SELECT_ORDER} WHERE o.buyer_id=? OR o.seller_id=? ORDER BY o.id DESC LIMIT ? OFFSET ?",
+        (g.user["id"], g.user["id"], size, offset)))
+    return jsonify({"ok": True, "orders": [serialize(db, o, g.user) for o in rs], 'page': page, 'pages': max(1, (total + size - 1) // size)})
 
 
 @bp.get("/orders/<int:oid>")
@@ -278,7 +321,6 @@ def _act(oid, action):
     """Ejecuta las acciones de una orden sin mantener abierta una transacción durante llamadas a Stripe."""
     db = get_db()
     data = request.get_json(silent=True) or {}
-    provider = get_provider()
     u = g.user
 
     target_status = (
@@ -360,7 +402,7 @@ def _act(oid, action):
             return api_error("Acción no reconocida.", 400)
 
         retrying = o["status"] == target_status
-        previous_status = None if retrying else o["status"]
+        # Keep the operation direction durable after any ambiguous external failure.
 
         if not retrying:
             allowed = (
@@ -370,12 +412,14 @@ def _act(oid, action):
             )
 
             try:
-                move(db, oid, allowed, target_status)
+                move(db, oid, allowed, target_status, operation_actor_id=u["id"], payment_operation_at=now(),
+                     operation_note=clean_text(data.get("note"), 300, required=False) or "")
             except Conflict as e:
                 return api_error(str(e), 409)
 
     # La llamada externa se realiza fuera de la transacción SQLite.
     try:
+        provider = get_provider(o["payment_provider"])
         if target_status == "RELEASING":
             transfer_id = provider.release(
                 oid,
@@ -384,25 +428,22 @@ def _act(oid, action):
                 o["amount_cents"],
             )
         else:
-            provider.refund(
-                oid,
-                o.get("stripe_payment_intent_id") or "",
-                o["amount_cents"],
-            )
+            refund_result = provider.refund(oid, o.get("stripe_payment_intent_id") or "", o["amount_cents"])
+            with tx(db):
+                db.execute("UPDATE orders SET stripe_refund_id=? WHERE id=? AND status='REFUNDING'",
+                           (refund_result['id'], oid))
+            if refund_result['status'] in ('failed', 'canceled'):
+                with tx(db):
+                    db.execute("UPDATE orders SET status='PAYMENT_REVIEW', updated_at=? WHERE id=? AND status='REFUNDING'", (now(), oid))
+                    from stripe_webhook import notify_admins
+                    notify_admins(db, oid, 'Stripe rechazó o canceló el reembolso. Requiere conciliación.')
+                return api_error('Stripe no completó el reembolso. La administración debe revisar la operación.', 409)
+            if refund_result['status'] != 'succeeded':
+                return jsonify({'ok': True, 'pending': True, 'message': 'Stripe aún no confirma el reembolso.'}), 202
 
     except Exception:
-        # Si es el primer intento, restauramos el estado anterior.
-        # Si es un reintento, conservamos el estado temporal para
-        # permitir otro intento sin perder la operación pendiente.
+        # A timeout is not a rejection: never unlock an opposite financial operation.
         with tx(db):
-            if not retrying:
-                db.execute(
-                    """UPDATE orders
-                       SET status=?, updated_at=?
-                       WHERE id=? AND status=?""",
-                    (previous_status, now(), oid, target_status),
-                )
-
             log_event(
                 db,
                 oid,
@@ -425,6 +466,8 @@ def _act(oid, action):
             f"{SELECT_ORDER} WHERE o.id=?", (oid,)
         ).fetchone()
 
+        if current and current['status'] == ('RELEASED' if target_status == 'RELEASING' else 'REFUNDED'):
+            return jsonify({'ok': True})
         if not current or current["status"] != target_status:
             return api_error(
                 "La operación de pago se procesó, pero el estado de "

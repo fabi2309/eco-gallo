@@ -57,16 +57,20 @@ jobs:
         run: pip-audit -r backend/requirements.txt
 
       - name: 5. Ejecución de pruebas unitarias automatizadas (Pytest)
-        run: pytest tests/test_unit.py -v
+        run: pytest tests -v
 
       - name: 6. Ejecución de pruebas de integración E2E
         env:
           ECOGALLO_DEV: "1"
+          ECOGALLO_AUTH_LIMIT: "1000"
+          ECOGALLO_BACKUP_ENABLED: "0"
+          ECOGALLO_RECONCILE_ENABLED: "0"
           ECOGALLO_ADMINS: "admin@edu.uaa.mx"
           PORT: "8080"
           PYTHONIOENCODING: "utf-8"
         run: |
-          python run_dev.py &
+          python backend/app.py &
+          java -cp gateway/out Gateway 8080 5000 frontend &
           for i in $(seq 1 30); do
             curl -sf http://localhost:8080/ >/dev/null && break
             sleep 1

@@ -93,7 +93,7 @@ export async function render(root, { args, state, go, refresh }) {
     };
   }
 
-  if (venta && p.status === "active") {
+  if (venta && p.status === "active" && state.meta.payment_mode !== "disabled") {
     act.innerHTML = `
       <div class="promise"><strong>${icon("shield")} Pago protegido</strong>
         <span>Tu dinero se queda retenido en ECO-GALLO y solo se entrega al vendedor cuando tú confirmas que recibiste el artículo.</span></div>
@@ -102,7 +102,7 @@ export async function render(root, { args, state, go, refresh }) {
     act.querySelector("#buy").onclick = async () => {
       const ok = await ask({
         title: `Pagar ${money(p.price_cents)}`,
-        text: "El pago se retiene hasta que confirmes la recepción. Si algo sale mal puedes abrir una disputa y la administración decide. (Modo demostración: no se cobra dinero real.)",
+        text: state.meta.payment_mode === "live" ? "Stripe procesa el pago. Confirma la recepción únicamente cuando tengas el artículo. Puedes abrir una disputa antes de liberar los fondos." : "Prueba del flujo de compra: no se cobra ni transfiere dinero real.",
         confirm: "Pagar y retener",
       });
       if (!ok) return;
@@ -118,9 +118,11 @@ export async function render(root, { args, state, go, refresh }) {
   go(`#/order/${r.id}`);
 } catch (e) {
   toast(e.message, true);
-  refresh();
+  if (e.data?.id) go(`#/order/${e.data.id}`); else refresh();
 }
     };
+  } else if (venta && p.status === "active" && state.meta.payment_mode === "disabled") {
+    act.innerHTML = `<div class="notice">Los pagos en línea aún no están habilitados.</div><a class="btn block" href="#/chat/${p.id}/${p.author.id}">Contactar al vendedor</a>`;
   } else if (p.status === "active") {
     act.innerHTML = `<a class="btn block" href="#/chat/${p.id}/${p.author.id}">${icon("chat")} Contactar para ${p.tipo === "donacion" ? "pedirlo" : "proponer un trueque"}</a>
       <p class="muted small">Las donaciones y los trueques se acuerdan por mensaje y no usan pago.</p>`;

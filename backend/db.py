@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
+  expires_at INTEGER NOT NULL,
+  reset_until INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS auth_challenges(
@@ -126,7 +127,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_live_post ON orders(post_id)
     'DELIVERED',
     'DISPUTED',
     'RELEASING',
-    'REFUNDING'
+    'REFUNDING', 'PAYMENT_REVIEW'
   );
 
 CREATE TABLE IF NOT EXISTS order_events(
@@ -265,6 +266,12 @@ _ORDER_MIGRATIONS = {
     "stripe_payment_intent_id": "TEXT NOT NULL DEFAULT ''",
     "stripe_charge_id": "TEXT NOT NULL DEFAULT ''",
     "stripe_transfer_id": "TEXT NOT NULL DEFAULT ''",
+    "stripe_refund_id": "TEXT NOT NULL DEFAULT ''",
+    "checkout_url": "TEXT NOT NULL DEFAULT ''",
+    "payment_provider": "TEXT NOT NULL DEFAULT 'simulado'",
+    "payment_operation_at": "INTEGER NOT NULL DEFAULT 0",
+    "operation_actor_id": "INTEGER",
+    "operation_note": "TEXT NOT NULL DEFAULT ''",
 }
 
 # Nombres anteriores de centros -> nombres del catálogo oficial (bases ya existentes).
@@ -294,9 +301,14 @@ def init_db():
             'DELIVERED',
             'DISPUTED',
             'RELEASING',
-            'REFUNDING'
+            'REFUNDING', 'PAYMENT_REVIEW'
         )
     """)
+
+    if "reset_until" not in {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}:
+        con.execute("ALTER TABLE sessions ADD COLUMN reset_until INTEGER NOT NULL DEFAULT 0")
+    if "email_authenticated" not in {r["name"] for r in con.execute("PRAGMA table_info(auth_challenges)")}:
+        con.execute("ALTER TABLE auth_challenges ADD COLUMN email_authenticated INTEGER NOT NULL DEFAULT 0")
 
     # Migraciones de usuarios.
     have_users = {
@@ -320,6 +332,8 @@ def init_db():
                 f"ALTER TABLE orders ADD COLUMN {col} {ddl}"
             )
 
+    con.execute("UPDATE orders SET payment_provider='stripe' WHERE stripe_session_id!='' OR payment_ref LIKE 'cs_%' OR status='PENDING_PAYMENT'")
+
     # Migración de publicaciones.
     have_posts = {
         r["name"] for r in con.execute("PRAGMA table_info(posts)")
@@ -330,6 +344,9 @@ def init_db():
             "ALTER TABLE posts ADD COLUMN views_count "
             "INTEGER NOT NULL DEFAULT 0"
         )
+
+    if "approved_price_cents" not in have_posts:
+        con.execute("ALTER TABLE posts ADD COLUMN approved_price_cents INTEGER NOT NULL DEFAULT -1")
 
     # Actualizar nombres anteriores de centros.
     for old, new in _CENTRO_RENAMES.items():

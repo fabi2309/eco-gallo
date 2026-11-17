@@ -37,4 +37,11 @@ for bad in ["alguien@gmail.com", "x@uaa.mx", "x@edu.uaa.mx.evil.com", "x@evil-ed
     check(f"rechaza {bad}", not is_institutional(bad))
 
 print("\nTodo bien." if not fails else f"\n{fails} fallo(s).")
-sys.exit(1 if fails else 0)
+
+
+def test_catalog_checks():
+    assert fails == 0
+
+
+if __name__ == "__main__":
+    sys.exit(1 if fails else 0)

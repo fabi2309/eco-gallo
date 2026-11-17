@@ -1,3 +1,5 @@
+import { pager } from "../pagination.js";
+import { renderBars } from "../charts.js";
 import { api } from "../api.js";
 import { esc, icon, money, timeAgo, ask, toast } from "../ui.js";
 
@@ -5,7 +7,7 @@ export async function render(root, { state, refresh, go }) {
   if (state.user.role !== "admin") return go("#/");
   
   const [d, bks, metrics, pending] = await Promise.all([
-    api.get("/api/admin/overview"),
+    api.get(`/api/admin/overview?page=${state.adminUsersPage || 1}`),
     api.get("/api/admin/backups").catch(() => ({ ok: false, backups: [], config: {} })),
     api.get("/api/admin/metrics").catch(() => ({ ok: false, users_monthly: [], posts_category: [], transactions: [] })),
     api.get("/api/admin/posts/pending").catch(() => ({ ok: false, posts: [] })),
@@ -28,16 +30,16 @@ export async function render(root, { state, refresh, go }) {
       <div class="row wrap" style="gap:20px; align-items: flex-start;">
         <div style="flex:1; min-width:280px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
           <h3 class="small muted" style="margin-bottom:10px">Usuarios Registrados por Mes</h3>
-          <canvas id="chartUsers" height="180"></canvas>
+          <div id="chartUsers"></div>
         </div>
         <div style="flex:1; min-width:280px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
           <h3 class="small muted" style="margin-bottom:10px">Publicaciones por Categoría</h3>
-          <canvas id="chartCategories" height="180"></canvas>
+          <div id="chartCategories"></div>
         </div>
       </div>
       <div style="margin-top:15px; background:var(--bg-card); padding:12px; border-radius:8px; border:1px solid var(--border)">
         <h3 class="small muted" style="margin-bottom:10px">Transacciones / Órdenes Realizadas</h3>
-        <canvas id="chartTransactions" height="120"></canvas>
+        <div id="chartTransactions"></div>
       </div>
     </div>
 
@@ -48,7 +50,7 @@ export async function render(root, { state, refresh, go }) {
         <div class="item" style="align-items: flex-start;">
           <div class="grow stack" style="gap:4px">
             <div class="t"><strong>${esc(p.title)}</strong> · <span class="muted small">${esc(p.category)} · ${p.price_cents ? money(p.price_cents) : p.tipo}</span></div>
-            <div class="small">${esc(p.description)}</div>
+            <div class="small">${esc(p.description)}</div><a class="btn ghost sm" href="#/post/${p.id}">Ver fotos y detalles</a>
             <div class="muted small">Publicado por ${esc(p.author.name)} (${esc(p.author.centro)}) · ${timeAgo(p.created_at)}</div>
           </div>
           <div class="row wrap" style="gap:8px">
@@ -91,7 +93,7 @@ export async function render(root, { state, refresh, go }) {
       </div>
       <p class="muted small">
         Respaldos periódicos: ${bks.config?.enabled ? `Activo (cada ${bks.config.interval_hours} horas, retiene ${bks.config.keep} copias)` : "Desactivado"}.
-        Empaqueta la base de datos SQLite y todas las fotografías/documentos en un archivo .zip descargable. Al restaurar, se crea automáticamente una copia preventiva del estado actual.
+        Los respaldos v2 están cifrados y requieren conservar la clave original del sistema. La restauración cierra las demás sesiones y crea una copia preventiva. Si existe historial Stripe, se requiere recuperación fuera de línea y conciliación financiera.
       </p>
       ${bks.backups && bks.backups.length ? `
         <div class="list">
@@ -113,39 +115,10 @@ export async function render(root, { state, refresh, go }) {
     </div>
   </div>`;
 
-  // Inicializar Gráficas con Chart.js si la librería está cargada
-  if (typeof Chart !== "undefined") {
-    const uM = metrics.users_monthly || [];
-    const pC = metrics.posts_category || [];
-    const txM = metrics.transactions || [];
-
-    new Chart(root.querySelector("#chartUsers"), {
-      type: 'line',
-      data: {
-        labels: uM.map(x => x.month || "Actual"),
-        datasets: [{ label: 'Usuarios', data: uM.map(x => x.count), borderColor: '#1d5c3a', backgroundColor: 'rgba(29, 92, 58, 0.1)', fill: true, tension: 0.3 }]
-      },
-      options: { responsive: true, plugins: { legend: { display: false } } }
-    });
-
-    new Chart(root.querySelector("#chartCategories"), {
-      type: 'doughnut',
-      data: {
-        labels: pC.map(x => x.category || "General"),
-        datasets: [{ data: pC.map(x => x.count), backgroundColor: ['#1d5c3a', '#2a8050', '#48b875', '#a3e6b5', '#888'] }]
-      },
-      options: { responsive: true }
-    });
-
-    new Chart(root.querySelector("#chartTransactions"), {
-      type: 'bar',
-      data: {
-        labels: txM.map(x => x.month || "Sin datos"),
-        datasets: [{ label: 'Órdenes', data: txM.map(x => x.count), backgroundColor: '#1d5c3a' }]
-      },
-      options: { responsive: true }
-    });
-  }
+  pager(root, d.page, d.pages, (next) => { state.adminUsersPage = next; return refresh(); }, "Usuarios: página");
+  renderBars(root.querySelector('#chartUsers'), (metrics.users_monthly || []).map(x => [x.month, x.count]));
+  renderBars(root.querySelector('#chartCategories'), (metrics.posts_category || []).map(x => [x.category, x.count]));
+  renderBars(root.querySelector('#chartTransactions'), (metrics.transactions || []).map(x => [x.month, x.count]));
 
   // Event Listeners existentes
   root.querySelectorAll("[data-ok]").forEach((b) => (b.onclick = async () => {

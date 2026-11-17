@@ -5,7 +5,10 @@ if "%ECOGALLO_SEED%"=="" set ECOGALLO_SEED=1
 if "%ECOGALLO_DEV%"=="" set ECOGALLO_DEV=1
 if "%ECOGALLO_ADMINS%"=="" set ECOGALLO_ADMINS=admin@edu.uaa.mx
 if "%PORT%"=="" set PORT=8080
-echo Instalando dependencias de Python si hacen falta...
-python -m pip install -q -r backend\requirements.txt
-python run_dev.py
+if not exist .venv\Scripts\python.exe python -m venv .venv
+if errorlevel 1 exit /b 1
+echo Instalando dependencias en el entorno local .venv...
+.venv\Scripts\python.exe -m pip install -q -r backend\requirements.txt
+if errorlevel 1 exit /b 1
+.venv\Scripts\python.exe run_dev.py
 pause

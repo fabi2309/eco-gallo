@@ -66,7 +66,7 @@ def _account_status(account):
 @bp.post("/onboarding")
 @login_required
 def create_onboarding():
-    if config.CONNECT_SIMULATED:
+    if config.CONNECT_SIMULATED and config.STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_")):
         db = get_db()
         account_id = f"SIM-CONNECT-{g.user['id']}"
 
@@ -99,12 +99,15 @@ def create_onboarding():
     account_id = g.user.get("stripe_account_id") or ""
 
     try:
+        if account_id.startswith("SIM-CONNECT-"):
+            return api_error("Esta cuenta pertenece a una prueba. Usa un usuario independiente para pagos reales.", 409)
         if account_id:
-            account = stripe_client.v2.core.accounts.retrieve(account_id)
+            account = stripe_client.v2.core.accounts.retrieve(account_id, {"include": ["configuration.recipient", "requirements"]})
         else:
             account = stripe_client.v2.core.accounts.create(
                 {
                     "contact_email": g.user["email"],
+                    "include": ["configuration.recipient", "requirements"],
                     "identity": {
                         "country": "MX",
                     },
@@ -149,6 +152,7 @@ def create_onboarding():
                 "use_case": {
                     "type": "account_onboarding",
                     "account_onboarding": {
+                        "configurations": ["recipient"],
                         "refresh_url": config.STRIPE_CONNECT_REFRESH_URL,
                         "return_url": config.STRIPE_CONNECT_RETURN_URL,
                         "collection_options": {
@@ -165,9 +169,9 @@ def create_onboarding():
             "account": _account_status(account),
         })
 
-    except stripe.StripeError as exc:
+    except stripe.StripeError:
         return api_error(
-            f"Stripe no pudo iniciar el registro: {exc}",
+            "Stripe no pudo iniciar el registro. Revisa la configuración y vuelve a intentarlo.",
             502,
         )
 
@@ -175,18 +179,10 @@ def create_onboarding():
 @bp.get("/status")
 @login_required
 def connect_status():
-    if config.CONNECT_SIMULATED:
+    if config.PAYMENT_PROVIDER == "simulado":
+        return jsonify({"ok": True, "connected": True, "simulated": True, "demo": True})
+    if config.CONNECT_SIMULATED and config.STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_")):
         account_id = g.user.get("stripe_account_id") or ""
-
-        if not account_id.startswith("SIM-CONNECT-"):
-            account_id = f"SIM-CONNECT-{g.user['id']}"
-            db = get_db()
-
-            with tx(db):
-                db.execute(
-                    "UPDATE users SET stripe_account_id=? WHERE id=?",
-                    (account_id, g.user["id"]),
-                )
 
         return jsonify({
             "ok": True,
@@ -199,7 +195,7 @@ def connect_status():
                 "connected": True,
                 "simulated": True,
             },
-            "connected": True,
+            "connected": account_id.startswith("SIM-CONNECT-"),
             "simulated": True,
         })
     try:
@@ -217,7 +213,7 @@ def connect_status():
         })
 
     try:
-        account = stripe_client.v2.core.accounts.retrieve(account_id)
+        account = stripe_client.v2.core.accounts.retrieve(account_id, {"include": ["configuration.recipient", "requirements"]})
         status = _account_status(account)
 
         return jsonify({
@@ -226,8 +222,8 @@ def connect_status():
             "connected": status["connected"],
         })
 
-    except stripe.StripeError as exc:
+    except stripe.StripeError:
         return api_error(
-            f"No se pudo consultar la cuenta de Stripe: {exc}",
+            "No se pudo consultar la cuenta de Stripe. Intenta más tarde.",
             502,
         )

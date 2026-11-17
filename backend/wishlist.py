@@ -117,7 +117,7 @@ def delete_wishlist(wid):
 def toggle_favorite(pid):
     db = get_db()
     post = db.execute("SELECT id, author_id, status FROM posts WHERE id=?", (pid,)).fetchone()
-    if not post or post["status"] == "removed":
+    if not post or post["status"] in ("removed", "pending"):
         return api_error("Publicación no encontrada.", 404)
     uid = g.user["id"]
     fav = db.execute("SELECT id FROM favorites WHERE user_id=? AND post_id=?", (uid, pid)).fetchone()

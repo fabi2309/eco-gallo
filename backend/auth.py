@@ -33,7 +33,7 @@ GENERIC_OK = "Si el correo está registrado, te enviamos un código. Revisa tu b
 BAD_LOGIN = "Correo o contraseña incorrectos. Si aún no tienes contraseña, entra con un código."
 
 
-def _totp_challenge_response(user: dict):
+def _totp_challenge_response(user: dict, email_authenticated=False):
     """Crea un desafío temporal sin otorgar todavía una sesión."""
     db = get_db()
     token = secrets.token_urlsafe(32)
@@ -46,6 +46,8 @@ def _totp_challenge_response(user: dict):
         (hash_challenge(token), user["id"], t + 300, t),
     )
 
+    db.execute("UPDATE auth_challenges SET email_authenticated=? WHERE token_hash=?",
+               (int(email_authenticated), hash_challenge(token)))
     return jsonify({
         "ok": True,
         "needs_totp": True,
@@ -88,8 +90,12 @@ def public_user(u: dict) -> dict:
     }
 
 
-def _session_response(user: dict, **extra):
+def _session_response(user: dict, email_authenticated=False, **extra):
     token = create_session(user["id"])
+    from runtime import csrf_token
+    if email_authenticated:
+        get_db().execute("UPDATE sessions SET reset_until=? WHERE token_hash=?", (now() + 600, hash_token(token)))
+    extra["csrf_token"] = csrf_token(token)
     out = jsonify({
         "ok": True, "user": public_user(user), "needs_profile": not user["name"],
         "needs_verification": user["kind"] == "egresado" and user["verif_status"] != "approved",
@@ -209,9 +215,9 @@ def verify():
         return api_error("Tu cuenta está suspendida. Contacta a la administración.", 403)
 
     if user["totp_enabled"]:
-        return _totp_challenge_response(user)
+        return _totp_challenge_response(user, email_authenticated=True)
 
-    return _session_response(user)
+    return _session_response(user, email_authenticated=True)
 
 
 # ---------------------------------------------------------------- contraseña
@@ -220,7 +226,7 @@ def login_password():
     data = request.get_json(silent=True) or {}
     email = normalize_email(data.get("email"))
     password = data.get("password")
-    if not email or not isinstance(password, str) or not password:
+    if not email or not isinstance(password, str) or not password or len(password) > config.PASSWORD_MAX:
         return api_error("Escribe tu correo y tu contraseña.", 400)
 
     db = get_db()
@@ -234,12 +240,12 @@ def login_password():
 
     if not check_password(user, password):
         if user:
-            fails = user["failed_logins"] + 1
-            if fails >= config.LOGIN_MAX_FAILS:
-                db.execute("UPDATE users SET failed_logins=0, locked_until=? WHERE id=?",
-                           (t + config.LOGIN_LOCK_SECONDS, user["id"]))
-            else:
-                db.execute("UPDATE users SET failed_logins=? WHERE id=?", (fails, user["id"]))
+            db.execute("""UPDATE users SET
+                locked_until=CASE WHEN failed_logins+1>=? THEN ? ELSE locked_until END,
+                failed_logins=CASE WHEN failed_logins+1>=? THEN 0 ELSE failed_logins+1 END
+                WHERE id=? AND locked_until<=?""",
+                       (config.LOGIN_MAX_FAILS, t + config.LOGIN_LOCK_SECONDS,
+                        config.LOGIN_MAX_FAILS, user['id'], t))
         return api_error(BAD_LOGIN, 401)
 
     if user["suspended"]:
@@ -372,7 +378,7 @@ def verify_totp_login():
     if resp:
         return resp
 
-    return _session_response(user)
+    return _session_response(user, email_authenticated=bool(challenge["email_authenticated"]))
 
 
 @bp.post("/auth/totp/setup")
@@ -642,23 +648,27 @@ def disable_totp():
 @bp.put("/auth/password")
 @login_required
 def set_password():
-    """Crear la contraseña (primera vez, ya con sesión) o cambiarla (pide la actual)."""
+    """Consume a short-lived email+2FA recovery grant or verify the current password."""
     data = request.get_json(silent=True) or {}
     new = data.get("new_password")
     problem = password_problem(new)
     if problem:
         return api_error(problem, 400)
     db = get_db()
-    me = dict(db.execute("SELECT * FROM users WHERE id=?", (g.user["id"],)).fetchone())
-    if me["password_hash"] and not check_password(me, data.get("current_password")):
-        return api_error("La contraseña actual no es correcta.", 400)
-    if new.lower() == me["email"]:
-        return api_error("La contraseña no puede ser tu correo.", 400)
-    db.execute("UPDATE users SET password_hash=?, failed_logins=0, locked_until=0 WHERE id=?",
-               (hash_password(new), me["id"]))
-    # Cierra las demás sesiones abiertas (por si alguien más había entrado).
     keep = hash_token(request.cookies.get(config.COOKIE_NAME, ""))
-    db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash!=?", (me["id"], keep))
+    with tx(db):
+        me = dict(db.execute("SELECT * FROM users WHERE id=?", (g.user["id"],)).fetchone())
+        session = db.execute("SELECT reset_until FROM sessions WHERE token_hash=?", (keep,)).fetchone()
+        recovered = session and session["reset_until"] > now()
+        if me["password_hash"] and not recovered and not check_password(me, data.get("current_password")):
+            return api_error("La contraseña actual no es correcta. También puedes entrar con un código para restablecerla.", 400)
+        if new.lower() == me["email"]:
+            return api_error("La contraseña no puede ser tu correo.", 400)
+        db.execute("UPDATE users SET password_hash=?, failed_logins=0, locked_until=0 WHERE id=?",
+                   (hash_password(new), me["id"]))
+        db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash!=?", (me["id"], keep))
+        db.execute("UPDATE sessions SET reset_until=0 WHERE token_hash=?", (keep,))
+        db.execute("DELETE FROM auth_challenges WHERE user_id=?", (me["id"],))
     return jsonify({"ok": True, "had_password": bool(me["password_hash"])})
 
 
@@ -796,8 +806,9 @@ def logout():
 
 @bp.get("/me")
 def me():
+    from runtime import csrf_token
     if not g.get("user"):
-        return jsonify({"ok": True, "user": None})
+        return jsonify({"ok": True, "user": None, "csrf_token": csrf_token()})
     db = get_db()
     uid = g.user["id"]
     unread_msgs = db.execute(
@@ -808,6 +819,9 @@ def me():
     ).fetchone()["c"]
     out = {
         "ok": True, "user": public_user(g.user), "needs_profile": not g.user["name"],
+        "csrf_token": csrf_token(),
+        "password_reset_allowed": get_db().execute("SELECT reset_until FROM sessions WHERE token_hash=?",
+                                                   (hash_token(request.cookies.get(config.COOKIE_NAME, "")),)).fetchone()[0] > now(),
         "unread_messages": unread_msgs, "unread_notifications": unread_notes,
         "needs_verification": g.user["kind"] == "egresado" and g.user["verif_status"] != "approved",
     }
@@ -856,6 +870,11 @@ def upload_avatar():
     ext = sniff_document(data)
     if ext not in ("jpg", "png", "webp"):
         return api_error("Solo se permiten imágenes JPG, PNG o WebP.", 400)
+    from media import normalize_image
+    try:
+        data, ext = normalize_image(data)
+    except ValueError as exc:
+        return api_error(str(exc))
     name = f"avatar-{uuid.uuid4().hex}.{ext}"
     (config.UPLOADS / name).write_bytes(data)
     db = get_db()

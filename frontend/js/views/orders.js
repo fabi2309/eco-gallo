@@ -1,3 +1,4 @@
+import { pager } from "../pagination.js";
 import { api } from "../api.js";
 import { esc, icon, money, timeAgo, ask, toast, STATUS } from "../ui.js";
 
@@ -5,8 +6,8 @@ export async function render(root, ctx) {
   return ctx.args[0] ? detail(root, ctx) : list(root, ctx);
 }
 
-async function list(root, { state }) {
-  const [{ orders }, w] = await Promise.all([api.get("/api/orders"), api.get("/api/wallet")]);
+async function list(root, { state }, page = 1) {
+  const [{ orders, pages }, w] = await Promise.all([api.get(`/api/orders?page=${page}`), api.get("/api/wallet")]);
   let tab = "buyer";
   const draw = () => {
     const rows = orders.filter((o) => o.role === tab);
@@ -15,7 +16,7 @@ async function list(root, { state }) {
           ${o.image ? `<img class="thumb" src="${esc(o.image)}" alt="">` : '<span class="thumb"></span>'}
           <div class="grow"><div class="t">${esc(o.post_title)}</div>
             <div class="muted small">${tab === "buyer" ? "Vendedor: " + esc(o.seller.name) : "Comprador: " + esc(o.buyer.name)} · ${timeAgo(o.updated_at)}</div>
-            <span class="state ${STATUS[o.status][1]} small" style="padding:2px 10px;font-size:.8rem">${esc(STATUS[o.status][0])}</span></div>
+            <span class="state ${(STATUS[o.status] || [o.status, "bad"])[1]} small" style="padding:2px 10px;font-size:.8rem">${esc((STATUS[o.status] || [o.status, "bad"])[0])}</span></div>
           <b>${money(o.amount_cents)}</b></a>`).join("")
       : `<div class="empty">${icon("bag")}<h2>${tab === "buyer" ? "Todavía no has comprado nada" : "Todavía no tienes ventas"}</h2><p>${tab === "buyer" ? "Cuando pagues un artículo, el dinero quedará retenido aquí hasta que lo recibas." : "Cuando alguien pague uno de tus artículos, lo verás aquí."}</p></div>`;
     root.querySelectorAll("[data-t]").forEach((b) => b.setAttribute("aria-selected", b.dataset.t === tab));
@@ -31,6 +32,7 @@ async function list(root, { state }) {
     <div class="list" id="rows"></div>`;
   root.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { tab = b.dataset.t; draw(); }));
   draw();
+  pager(root, page, pages, (next) => list(root, { state }, next));
 }
 
 const STEPS = [
@@ -42,7 +44,7 @@ const STEPS = [
 
 function track(o) {
   const st = o.status;
-  let idx = { HELD: 1, DELIVERED: 2, DISPUTED: 2, RELEASED: 4, REFUNDED: 1 }[st];
+  let idx = { PENDING_PAYMENT: 0, CANCELLED: 0, RELEASING: 3, REFUNDING: 1, PAYMENT_REVIEW: 2, HELD: 1, DELIVERED: 2, DISPUTED: 2, RELEASED: 4, REFUNDED: 1 }[st];
   if (st === "RELEASED") idx = 4;
   return STEPS.map(([k, t, d], i) => {
     let cls = i < idx ? "done" : i === idx ? "now" : "idle";
@@ -55,13 +57,14 @@ function track(o) {
 }
 
 const WHERE = {
+  PENDING_PAYMENT: "Pendiente de pago", CANCELLED: "Sin cobro", RELEASING: "Transferencia en verificación", REFUNDING: "Reembolso en verificación", PAYMENT_REVIEW: "Pendiente de conciliación",
   HELD: "En custodia de ECO-GALLO", DELIVERED: "En custodia de ECO-GALLO", DISPUTED: "En custodia (en revisión)",
   RELEASED: "Con el vendedor", REFUNDED: "De vuelta con el comprador",
 };
 
 async function detail(root, { args, state, refresh, go }) {
   const { order: o } = await api.get(`/api/orders/${args[0]}`);
-  const [label, kind] = STATUS[o.status];
+  const [label, kind] = STATUS[o.status] || [o.status, "bad"];
   const A = new Set(o.actions);
   const BTN = {
     confirm: `<button class="btn green block" data-a="confirm">${icon("check")} Sí, ya lo recibí: liberar el pago</button>`,
@@ -87,6 +90,9 @@ async function detail(root, { args, state, refresh, go }) {
       <div class="money"><div><div class="muted small">Monto</div><div class="amt">${money(o.amount_cents)}</div></div>
         <div style="text-align:right"><div class="muted small">Dónde está el dinero</div><b>${esc(WHERE[o.status])}</b></div></div>
       ${help ? `<div class="notice">${esc(help)}</div>` : ""}
+      ${o.simulated ? '<div class="notice">Demostración: esta orden no representa dinero real.</div>' : ''}
+      ${o.status === 'PENDING_PAYMENT' && o.role === 'buyer' ? '<div class="row wrap"><button class="btn" id="checkout-resume">Continuar pago</button><button class="btn ghost" id="checkout-cancel">Cancelar compra</button></div>' : ''}
+      ${['PENDING_PAYMENT', 'RELEASING', 'REFUNDING', 'PAYMENT_REVIEW'].includes(o.status) ? '<button class="btn ghost" id="payment-refresh">Actualizar estado</button><p class="muted small">Si el resultado aún no está confirmado, conserva esta orden y vuelve a consultar.</p>' : ''}
       <ol class="track" aria-label="Avance del pago">${track(o)}</ol>
       ${o.dispute_reason ? `<div class="error">Motivo de la disputa: ${esc(o.dispute_reason)}</div>` : ""}
       <div class="stack" id="acts">${o.actions.map((a) => BTN[a]).join("")}</div>
@@ -96,6 +102,16 @@ async function detail(root, { args, state, refresh, go }) {
       ${o.events.map((e) => `<div><b>${esc(e.actor || "Sistema")}</b> · <span class="muted">${timeAgo(e.created_at)}</span><br>${esc(e.note || e.event)}</div>`).join("")}</div></div>
   </div>`;
 
+  root.querySelector('#payment-refresh')?.addEventListener('click', async () => {
+    try { await api.post(`/api/orders/${o.id}/sync`, {}); refresh(); } catch (err) { toast(err.message, true); }
+  });
+  root.querySelector('#checkout-resume')?.addEventListener('click', async () => {
+    try { const r = await api.post(`/api/orders/${o.id}/checkout`, {}); window.location.assign(r.checkout_url); } catch (err) { toast(err.message, true); }
+  });
+  root.querySelector('#checkout-cancel')?.addEventListener('click', async () => {
+    if (!(await ask({ title: '¿Cancelar compra pendiente?', confirm: 'Cancelar compra' }))) return;
+    try { await api.post(`/api/orders/${o.id}/cancel`, {}); refresh(); } catch (err) { toast(err.message, true); }
+  });
   root.querySelectorAll("[data-a]").forEach((b) => (b.onclick = async () => {
     const a = b.dataset.a;
     const body = {};
