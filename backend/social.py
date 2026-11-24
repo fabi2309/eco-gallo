@@ -109,8 +109,22 @@ def notifications():
 @bp.post("/notifications/read")
 @login_required
 def notifications_read():
-    get_db().execute(
-        "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL", (now(), g.user["id"]))
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return api_error('Datos inválidos.', 400)
+    ids = data.get('ids')
+    if ids is not None:
+        if (not isinstance(ids, list) or len(ids) > 50
+                or any(type(item) is not int or not 0 < item <= 9223372036854775807 for item in ids)):
+            return api_error('Selecciona hasta 50 notificaciones válidas.', 400)
+        if ids:
+            stamp, uid = now(), g.user['id']
+            get_db().executemany(
+                "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL AND id=?",
+                [(stamp, uid, item) for item in ids])
+    else:
+        get_db().execute(
+            "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL", (now(), g.user["id"]))
     return jsonify({"ok": True})
 
 
