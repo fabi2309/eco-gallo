@@ -17,3 +17,4 @@ gateway/out/
 .idea/
 .DS_Store
 Thumbs.db
+artifacts/

@@ -92,6 +92,32 @@ def test_csrf_origin_and_headers(app, actors):
     assert seller.call('PUT', '/api/me', json=[]).status_code == 400
 
 
+def test_notification_read_is_selective_and_owned(app, actors):
+    seller, buyer, _ = actors
+    with app.app_context():
+        def note(uid):
+            return db.get_db().execute(
+                'INSERT INTO notifications(user_id,text,link,created_at) VALUES(?,?,?,?)',
+                (uid, 'Aviso de prueba', '#/mine', db.now())).lastrowid
+        selected, unseen, foreign = note(seller.id), note(seller.id), note(buyer.id)
+    assert seller.call('POST', '/api/notifications/read', json={'ids': [selected, foreign]}).status_code == 200
+    own = {n['id']: n['read_at'] for n in seller.call('GET', '/api/notifications').json['notifications']}
+    assert own[selected] and own[unseen] is None
+    assert buyer.call('GET', '/api/notifications').json['notifications'][0]['read_at'] is None
+    assert seller.call('POST', '/api/notifications/read', json={'ids': []}).status_code == 200
+    assert any(n['read_at'] is None for n in seller.call('GET', '/api/notifications').json['notifications'])
+    assert seller.call('POST', '/api/notifications/read', json={}).status_code == 200
+    assert all(n['read_at'] for n in seller.call('GET', '/api/notifications').json['notifications'])
+
+
+@pytest.mark.parametrize('payload', [
+    {'ids': [True]}, {'ids': [-1]}, {'ids': ['1']}, {'ids': [2**80]},
+    {'ids': list(range(1, 52))}, {'ids': '1'}, ['invalid'],
+])
+def test_notification_read_rejects_invalid_ids(actors, payload):
+    assert actors[0].call('POST', '/api/notifications/read', json=payload).status_code == 400
+
+
 @pytest.mark.parametrize('price', ['NaN', 'Infinity', '-Infinity', '1e100', '1e999999', '-1'])
 def test_invalid_prices_are_400(app, actors, price):
     assert actors[0].call('GET', '/api/posts?min_price=' + price).status_code == 400
@@ -464,3 +490,40 @@ def test_failed_refunds_require_review_instead_of_showing_success(app, actors, m
     assert actors[0].call('POST', f'/api/orders/{oid}/refund', json={}).status_code == 409
     assert row(app, oid)['status'] == 'PAYMENT_REVIEW'
     assert not actors[1].call('GET', f'/api/orders/{oid}').json['order']['actions']
+
+
+def test_mobile_simulation_guard_prevents_external_checkout(app, actors, monkeypatch):
+    import orders
+    seller, buyer, _ = actors
+    pid = post(app, seller)
+    provider = SimpleNamespace(name='stripe')
+    monkeypatch.setattr(orders, 'get_provider', lambda *args: provider)
+    ready = Mock(side_effect=AssertionError('No debe consultar Stripe'))
+    monkeypatch.setattr(orders, 'seller_ready', ready)
+    response = buyer.call('POST', '/api/orders', json={'post_id': pid, 'simulation_only': True})
+    assert response.status_code == 409
+    ready.assert_not_called()
+    with app.app_context():
+        assert db.get_db().execute('SELECT status FROM posts WHERE id=?', (pid,)).fetchone()[0] == 'active'
+        assert db.get_db().execute('SELECT COUNT(*) FROM orders').fetchone()[0] == 0
+
+
+def test_mobile_simulation_guard_prevents_external_order_action(app, actors, monkeypatch):
+    import orders
+    oid = order(app, actors, provider='stripe')
+    provider = Mock(side_effect=AssertionError('No debe tocar proveedor externo'))
+    monkeypatch.setattr(orders, 'get_provider', provider)
+    response = actors[1].call('POST', f'/api/orders/{oid}/confirm', json={'simulation_only': True})
+    assert response.status_code == 409
+    assert row(app, oid)['status'] == 'HELD'
+    provider.assert_not_called()
+
+
+def test_can_remove_saved_post_after_it_becomes_unavailable(app, actors):
+    seller, buyer, _ = actors
+    pid = post(app, seller)
+    assert buyer.call('POST', f'/api/posts/{pid}/favorite', json={}).json['favorited'] is True
+    with app.app_context():
+        db.get_db().execute("UPDATE posts SET status='pending' WHERE id=?", (pid,))
+    assert buyer.call('POST', f'/api/posts/{pid}/favorite', json={}).json['favorited'] is False
+    assert buyer.call('POST', f'/api/posts/{pid}/favorite', json={}).status_code == 404

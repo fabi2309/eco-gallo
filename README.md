@@ -22,6 +22,12 @@ Las variables se leen del entorno del proceso. `.env.example` es una plantilla; 
 
 ## Funciones
 
+### Aplicación móvil Android
+
+El cliente Flutter está en `mobile/`: acceso, perfil, catálogo y publicaciones con fotos, favoritos, deseos, mensajes, notificaciones, compras y ventas simuladas, saldo, actividad e impacto. Incluye «Mis publicaciones», edición, pausa, reanudación y cierre de donaciones o trueques; conserva la revisión administrativa de la web. Para una prueba aislada ejecuta `run_mobile_demo.bat` y, en otra terminal con el emulador encendido, `run_mobile.bat`. Consulta los pasos, cuentas de demo y alcance en [mobile/README.md](mobile/README.md).
+
+### Aplicación web
+
 - Acceso institucional por correo, contraseña y 2FA opcional con códigos de recuperación.
 - Restablecimiento de contraseña después de verificar correo y, si está activado, 2FA; autorización de 10 minutos y un solo uso.
 - Registro de egresados con revisión administrativa y documentos privados.
@@ -51,6 +57,8 @@ El servidor de desarrollo y el gateway Java escuchan únicamente en loopback por
 Producción exige HTTPS, cookies Secure, SMTP y un secreto persistente; rechaza DEV y simulación. No publiques directamente el servidor de desarrollo. Las instrucciones de proxy, Docker y respaldo están en [OPERACION.md](docs/OPERACION.md).
 
 ## Pruebas
+
+Para exponer el proyecto con el APK y USB, sigue [la guía de presentación](docs/PRESENTACION.md). Las comprobaciones y límites de la entrega están en [ENTREGA.md](docs/ENTREGA.md).
 
 ```powershell
 python -m pip install -r backend/requirements.txt -r requirements-dev.txt

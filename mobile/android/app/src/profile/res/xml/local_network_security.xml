@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Profile APK for the local thesis. ApiClient restricts HTTP to private IPs
+     only when compiled with LOCAL_NETWORK_BUILD=true. Release stays HTTPS. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

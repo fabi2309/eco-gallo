@@ -1,6 +1,6 @@
 # Entrega técnica — ECO-GALLO
 
-Fecha de revisión: 17 de noviembre de 2026. Cambios aplicados sobre `rama-rey1`, que ya contenía el merge Stripe `debdc20`. Los cambios permanecen locales para revisión; no se publicaron ni se activaron pagos reales.
+Fecha de revisión: 24 de noviembre de 2026. Cambios aplicados sobre `rama-rey1`, que ya contenía el merge Stripe `debdc20`. La entrega incluye el cliente Android y sus scripts locales; no se publicaron cambios remotos ni se activaron pagos reales.
 
 ## Resultado
 
@@ -40,7 +40,7 @@ La activación real de Stripe sigue pendiente de la cuenta bancaria, la verifica
 
 | Comprobación | Resultado |
 |---|---|
-| `python -m pytest tests -q` | **69 aprobadas**, incluyendo regresiones financieras, firmas reales con el SDK, CSRF, permisos, recuperación y migración de una base anterior. |
+| `python -m pytest tests -q` | **82 aprobadas** en el cierre, incluyendo regresiones financieras, firmas reales con el SDK, CSRF, permisos, recuperación, migración, notificaciones y arranque móvil con datos principales. |
 | Suite API por HTTP real contra Waitress y una base temporal | **167 comprobaciones aprobadas**, resultado TODO OK. |
 | Flake8 sobre backend, pruebas y arranques | **0 errores**. |
 | Sintaxis de todos los módulos JavaScript con `node --check` | Sin errores. |
@@ -68,3 +68,28 @@ En Windows ejecuta `run_dev.bat`. Se prepara `.venv`, se instalan dependencias y
 Para repetir las pruebas: instala `backend/requirements.txt` y `requirements-dev.txt` en tu entorno y ejecuta `python -m pytest tests -q` y `python tests/run_e2e.py`. El runner HTTP usa una base desechable y puede tardar alrededor de dos minutos por los tiempos de reenvío de códigos.
 
 Para ponerlo en un servidor utiliza exclusivamente la configuración descrita en [OPERACION.md](OPERACION.md).
+
+## Cierre Android y presentación por USB
+
+La guía operativa está en [PRESENTACION.md](PRESENTACION.md), con preparación, arranque en dos terminales, recorrido por roles, alternativas y tabla de fallas. La instalación y los detalles técnicos del móvil están en [mobile/README.md](../mobile/README.md).
+
+| Comprobación de cierre | Resultado observado |
+|---|---|
+| Flutter analyze | Sin incidencias. |
+| Flutter test | 42 pruebas aprobadas; incluyen una matriz de 256 combinaciones de pantalla, teclado y texto. |
+| Android `stability` | Aprobado: giro real, conservación del borrador y salida sin red, sin cookie en la siguiente petición. El emulador no desplegó teclado virtual; el espacio del teclado se prueba en la matriz local. |
+| Android `community` | Aprobado: favoritos, deseos, notificaciones, chat entre cuentas, perfil/avatar, actividad, impacto, pedidos, reembolso y disputa, con controles entre roles. |
+| Android `posts` | Aprobado: publicación con fotos, edición, revisión, pausa/reanudación y control del propietario. |
+| Android con selector nativo real | Aprobado: selección manual de la imagen ficticia en el selector Android y continuación completa de la prueba de publicaciones. |
+| HTTP real sobre Waitress | 167 comprobaciones aprobadas, resultado TODO OK. |
+| Flake8 | 0 errores en backend, pruebas y los arranques móviles revisados. |
+| Bandit `-ll -ii` | Sin hallazgos de severidad media/alta con ese filtro; no equivale a ausencia absoluta de riesgos. |
+| pip-audit | Sin vulnerabilidades conocidas reportadas en los requisitos backend consultados al cierre. |
+| APK local independiente | Instalado y arrancado en teléfono físico durante la preparación y nuevamente en el emulador al cierre, sin depender de Flutter en ejecución. |
+| Respaldo principal | Creado y descifrado para validar su integridad, sin restaurarlo sobre la base principal. Incluye SQLite, fotos y documentos; clave privada separada, excluida del paquete público. |
+
+Se sustituyó la construcción dinámica de la consulta de lectura selectiva de notificaciones por SQL constante con parámetros enlazados. Se corrigieron los avisos de estilo encontrados. Las pruebas automatizadas usaron cuentas y bases temporales; se mantuvo el servidor principal del usuario y se restauró el APK normal al terminar. Las capturas de [evidencias/movil](evidencias/movil/README.md) muestran únicamente datos e imágenes de prueba.
+
+El cierre conserva el alcance de tesina: Android, avisos internos y pagos simulados; no incluye iOS, push con la app cerrada, pagos reales ni despliegue público. Registro y recuperación por correo requieren SMTP configurado. La presentación por USB no modifica el firewall y necesita que la PC y el servidor permanezcan activos. No se validó un envío real de correo ni una operación real de Stripe en este cierre.
+
+La entrega reproducible contiene el código confirmado localmente, APK, guía y evidencias. Las bases, claves, documentos privados, SDK y entornos virtuales quedan fuera del archivo de entrega pública. No se hizo push; se conserva la rama `rama-rey1`.

@@ -142,7 +142,8 @@ def meta():
         "carreras": catalog.CENTROS_CARRERAS, "email_domains": list(config.EMAIL_DOMAINS),
         "password_min": config.PASSWORD_MIN, "doc_types": config.VERIF_DOC_TYPES,
         "conditions": config.CONDITIONS, "meeting_points": config.SAFE_MEETING_POINTS,
-        "max_images": config.MAX_IMAGES, "max_price_cents": config.MAX_PRICE_CENTS,
+        "max_images": config.MAX_IMAGES, "max_image_bytes": config.MAX_IMAGE_BYTES,
+        "max_price_cents": config.MAX_PRICE_CENTS,
     })
 
 

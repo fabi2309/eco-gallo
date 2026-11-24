@@ -116,6 +116,8 @@ def create_order():
     except RuntimeError as exc:
         return api_error(str(exc), 503)
     is_stripe = provider.name == "stripe"
+    if data.get('simulation_only') is True and provider.name != 'simulado':
+        return api_error('Este cliente solo permite pedidos con pagos simulados.', 409)
 
     if is_stripe:
         seller = db.execute("SELECT u.stripe_account_id FROM users u JOIN posts p ON p.author_id=u.id WHERE p.id=? AND u.suspended=0", (pid,)).fetchone()
@@ -342,6 +344,9 @@ def _act(oid, action):
             return api_error("Orden no encontrada.", 404)
 
         o = dict(row)
+
+        if data.get('simulation_only') is True and o['payment_provider'] != 'simulado':
+            return api_error('Este cliente solo permite operaciones simuladas.', 409)
 
         if action not in actions_for(o, u):
             return api_error(
