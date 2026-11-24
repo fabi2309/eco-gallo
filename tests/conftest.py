@@ -4,7 +4,10 @@ import tempfile
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+ROOT = Path(__file__).resolve().parent.parent
+# Both the pytest executable and python -m pytest need the project entrypoints.
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))
 
 os.environ['ECOGALLO_DATA'] = tempfile.mkdtemp(prefix='ecogallo-pytest-')
 os.environ['ECOGALLO_BACKUP_ENABLED'] = '0'
