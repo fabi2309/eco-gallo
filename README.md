@@ -58,7 +58,7 @@ Producción exige HTTPS, cookies Secure, SMTP y un secreto persistente; rechaza 
 
 ## Pruebas
 
-Para exponer el proyecto con el APK y USB, sigue [la guía de presentación](docs/PRESENTACION.md). Las comprobaciones y límites de la entrega están en [ENTREGA.md](docs/ENTREGA.md).
+La instalación del APK, los modos de conexión USB y red local y el alcance del cliente Android se describen en [mobile/README.md](mobile/README.md). La configuración de producción y respaldos está en [OPERACION.md](docs/OPERACION.md).
 
 ```powershell
 python -m pip install -r backend/requirements.txt -r requirements-dev.txt
