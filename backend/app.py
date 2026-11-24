@@ -21,6 +21,11 @@ def create_app() -> Flask:
     config.validate_runtime()
     dbmod.init_db()
 
+    from accounts import bp as accounts_bp
+    from microsoft import bp as microsoft_bp
+    from mercadopago import bp as mercadopago_bp
+    from cart import bp as cart_bp
+    from phone import bp as phone_bp
     from activity import bp as activity_bp
     from admin import bp as admin_bp
     from auth import bp as auth_bp
@@ -35,6 +40,11 @@ def create_app() -> Flask:
     # Registrar todos los módulos del proyecto, incluidos los de Stripe.
     for bp in (
         auth_bp,
+        accounts_bp,
+        microsoft_bp,
+        mercadopago_bp,
+        cart_bp,
+        phone_bp,
         posts_bp,
         orders_bp,
         connect_bp,
@@ -93,6 +103,9 @@ def create_app() -> Flask:
         logging.getLogger("ecogallo").exception("Error no controlado")
         return jsonify({"ok": False, "message": "Error interno del servidor."}), 500
 
+    from accounts import bootstrap_admin
+    if bootstrap_admin():
+        print(f"  Cuenta de administración lista: {config.ADMIN_EMAIL}", flush=True)
     if os.environ.get("ECOGALLO_SEED", "0") == "1":
         from seed import seed
         seed()

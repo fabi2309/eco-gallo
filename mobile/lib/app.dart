@@ -8,6 +8,7 @@ import 'core/session_controller.dart';
 import 'core/photo_picker_service.dart';
 import 'features/auth/auth_screen.dart';
 import 'features/catalog/catalog_screen.dart';
+import 'features/community/legal_screen.dart';
 import 'ui/shared.dart';
 
 class EcoGalloApp extends StatefulWidget {
@@ -46,7 +47,7 @@ class _EcoGalloAppState extends State<EcoGalloApp> with WidgetsBindingObserver {
     _inboxTimer?.cancel();
     if (_foreground) {
       _inboxTimer = Timer.periodic(
-        const Duration(seconds: 30),
+        const Duration(seconds: 5),
         (_) => _refreshInbox(),
       );
     }
@@ -137,6 +138,7 @@ class _EcoGalloAppState extends State<EcoGalloApp> with WidgetsBindingObserver {
         ),
         SessionPhase.signedOut => AuthScreen(session),
         SessionPhase.profile => ProfileCompletionScreen(session),
+        SessionPhase.terms => LegalScreen(session, requiredConsent: true),
         SessionPhase.signedIn => CatalogScreen(session, photos),
         SessionPhase.offline => Scaffold(
           appBar: AppBar(

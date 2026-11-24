@@ -22,8 +22,19 @@ def reconcile(oid):
     if not row:
         return
     o = dict(row)
-    if o['payment_provider'] != 'stripe':
+    if o['payment_provider'] == 'mercadopago':
+        import mercadopago
+        if o['status'] == 'PENDING_PAYMENT' or (o['status'] in ('HELD', 'DELIVERED', 'DISPUTED') and o['checkout_group']):
+            mercadopago.sync_group(o['checkout_group'])
+            return
+        if o['status'] not in ('RELEASING', 'REFUNDING'):
+            return
+    elif o['payment_provider'] != 'stripe':
         return
+    if o['status'] in ('RELEASING', 'REFUNDING'):
+        return _act(oid, 'confirm' if o['status'] == 'RELEASING' and g.user['id'] == o['buyer_id'] else
+                    'resolve_release' if o['status'] == 'RELEASING' else
+                    'refund' if g.user['id'] == o['seller_id'] else 'resolve_refund')
     provider = get_provider('stripe')
     if o['status'] == 'PENDING_PAYMENT':
         sid = o['stripe_session_id']
@@ -88,7 +99,7 @@ def start_scheduler(app):
             time.sleep(60)
             with app.app_context():
                 pending = list(get_db().execute("""SELECT id,operation_actor_id,buyer_id FROM orders
-                    WHERE payment_provider='stripe' AND status IN ('PENDING_PAYMENT','RELEASING','REFUNDING')
+                    WHERE payment_provider IN ('stripe','mercadopago') AND status IN ('PENDING_PAYMENT','RELEASING','REFUNDING')
                     AND updated_at<? LIMIT 50""", (now() - 35,)))
             for row in pending:
                 with app.test_request_context(json={}, method='POST'):

@@ -15,6 +15,7 @@ from cryptography.fernet import InvalidToken
 
 import catalog
 import config
+from accounts import needs_terms, record_terms
 from badges import user_badges
 from db import get_db, now, rows, tx
 from security import (
@@ -26,6 +27,8 @@ from security import (
     sniff_document, totp_provisioning_uri, verify_totp_counter,
 )
 
+from phone import public_payment_profile  # noqa: E402
+
 log = logging.getLogger("ecogallo")
 bp = Blueprint("auth", __name__, url_prefix="/api")
 
@@ -33,21 +36,22 @@ GENERIC_OK = "Si el correo está registrado, te enviamos un código. Revisa tu b
 BAD_LOGIN = "Correo o contraseña incorrectos. Si aún no tienes contraseña, entra con un código."
 
 
-def _totp_challenge_response(user: dict, email_authenticated=False):
-    """Crea un desafío temporal sin otorgar todavía una sesión."""
+def new_totp_challenge(user: dict, email_authenticated=False) -> str:
+    """Crea un desafío 2FA temporal (5 min) sin otorgar todavía una sesión. Devuelve el token."""
     db = get_db()
     token = secrets.token_urlsafe(32)
     t = now()
-
     db.execute(
         """INSERT INTO auth_challenges
-           (token_hash, user_id, expires_at, attempts, used, created_at)
-           VALUES (?, ?, ?, 0, 0, ?)""",
-        (hash_challenge(token), user["id"], t + 300, t),
+           (token_hash, user_id, expires_at, attempts, used, created_at, email_authenticated)
+           VALUES (?, ?, ?, 0, 0, ?, ?)""",
+        (hash_challenge(token), user["id"], t + 300, t, int(email_authenticated)),
     )
+    return token
 
-    db.execute("UPDATE auth_challenges SET email_authenticated=? WHERE token_hash=?",
-               (int(email_authenticated), hash_challenge(token)))
+
+def _totp_challenge_response(user: dict, email_authenticated=False):
+    token = new_totp_challenge(user, email_authenticated)
     return jsonify({
         "ok": True,
         "needs_totp": True,
@@ -85,8 +89,10 @@ def public_user(u: dict) -> dict:
         "has_password": bool(u["password_hash"]),
         "totp_enabled": bool(u["totp_enabled"]),
         "bio": u["bio"],
+        "terms_version": u.get("terms_version", ""), "terms_accepted_at": u.get("terms_accepted_at", 0),
         "badges": user_badges(get_db(), u["id"]),
         "avatar": f"/uploads/{u['avatar']}" if u["avatar"] else "",
+        "payments": public_payment_profile(u),
     }
 
 
@@ -99,6 +105,7 @@ def _session_response(user: dict, email_authenticated=False, **extra):
     out = jsonify({
         "ok": True, "user": public_user(user), "needs_profile": not user["name"],
         "needs_verification": user["kind"] == "egresado" and user["verif_status"] != "approved",
+        "needs_terms": needs_terms(user),
         **extra,
     })
     out.set_cookie(
@@ -143,8 +150,8 @@ def _issue_code(db, email: str):
 
     out = {"ok": True, "message": GENERIC_OK, "ttl": config.CODE_TTL_SECONDS,
            "cooldown": config.CODE_COOLDOWN_SECONDS}
-    if config.DEV:
-        out["dev_code"] = code  # SOLO modo desarrollo (ECOGALLO_DEV=1)
+    if config.DEV and not config.SMTP_HOST:
+        out["dev_code"] = code  # SOLO modo desarrollo sin correo configurado (ECOGALLO_DEV=1)
     return out, None
 
 
@@ -729,6 +736,8 @@ def register_alumni():
     problem = password_problem(password)
     if problem:
         return api_error(problem, 400)
+    if form.get("accept_terms") != config.LEGAL_VERSION:
+        return api_error("Para registrarte debes aceptar el aviso de privacidad y los términos de uso.", 400)
 
     db = get_db()
     existing = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
@@ -763,6 +772,7 @@ def register_alumni():
                    email_verified,verif_status) VALUES(?,?,?,?,?,?,?,'egresado',0,'pending')""",
                 (email, name, carrera, centro, role, t, hash_password(password)))
             uid = cur.lastrowid
+        record_terms(db, uid)
         _replace_pending_document(db, uid, doc_type, filename)
 
     out, err = _issue_code(db, email)   # confirma que el correo es suyo
@@ -823,7 +833,10 @@ def me():
         "password_reset_allowed": get_db().execute("SELECT reset_until FROM sessions WHERE token_hash=?",
                                                    (hash_token(request.cookies.get(config.COOKIE_NAME, "")),)).fetchone()[0] > now(),
         "unread_messages": unread_msgs, "unread_notifications": unread_notes,
+        "cart_count": db.execute("SELECT COUNT(*) FROM cart_items c JOIN posts p ON p.id=c.post_id "
+                                 "WHERE c.user_id=? AND p.status='active'", (uid,)).fetchone()[0],
         "needs_verification": g.user["kind"] == "egresado" and g.user["verif_status"] != "approved",
+        "needs_terms": needs_terms(g.user),
     }
     if g.user["kind"] == "egresado":
         last = db.execute(

@@ -133,6 +133,13 @@ void main() {
       );
       await choose('post-category', 'Libros');
       await enter('post-price', '199.50');
+      await visible(find.text('Punto de entrega y precio nuevo (opcional)'));
+      await tester.tap(find.text('Punto de entrega y precio nuevo (opcional)'));
+      await tester.pumpAndSettle();
+      await enter('post-meeting', 'Biblioteca universitaria');
+      await enter('post-latitude', '21.9139');
+      await enter('post-longitude', '-102.3159');
+      await enter('post-new-price', '499.50');
       await tapKey('pick-photos');
       await waitFor(find.textContaining('1/5 seleccionadas'), attempts: 1800);
       expect(find.textContaining('1/5 seleccionadas'), findsOneWidget);
@@ -146,6 +153,10 @@ void main() {
       final firstImage = (created['images'] as List).single;
       expect(created['status'], 'pending');
       expect(created['price_cents'], 19950);
+      expect(created['meeting']['place'], 'Biblioteca universitaria');
+      // The backend intentionally rounds locations to about 100 m.
+      expect(created['meeting']['lat'], 21.914);
+      expect(created['new_price_cents'], 49950);
       expect(await inCatalog(id), false);
       await expectLater(
         other.get('/api/posts/$id'),
@@ -169,6 +180,11 @@ void main() {
       await tester.pumpAndSettle();
       await waitFor(find.text('Disponible'));
       expect(await inCatalog(id), true);
+      await visible(find.text('Destacar gratis'));
+      await tester.tap(find.text('Destacar gratis'));
+      await tester.pumpAndSettle();
+      await waitFor(find.text('Destacada'));
+      expect((await ownPost(id))['featured'], true);
       await tapKey('pause-$id');
       await waitFor(find.text('Pausado'));
       expect(await inCatalog(id), false);

@@ -14,6 +14,9 @@ import 'detail_screen.dart';
 import '../community/community_screens.dart';
 import '../community/chat_screen.dart';
 import '../orders/orders_screen.dart';
+import '../orders/checkout_screen.dart';
+import '../orders/payment_settings_screen.dart';
+import '../community/legal_screen.dart';
 
 class CatalogScreen extends StatefulWidget {
   const CatalogScreen(this.session, this.picker, {super.key});
@@ -31,6 +34,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
   int generation = 0;
   PostPage? data;
   Timer? debounce;
+  double? nearbyLat, nearbyLng;
+  double nearbyRadius = 10;
+  String sort = 'nuevo';
   @override
   void initState() {
     super.initState();
@@ -56,6 +62,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
         category: category,
         tipo: tipo,
         page: page,
+        latitude: nearbyLat,
+        longitude: nearbyLng,
+        radius: nearbyRadius,
+        sort: nearbyLat == null ? sort : 'cerca',
       );
       if (!mounted || request != generation) return;
       setState(() {
@@ -119,6 +129,84 @@ class _CatalogScreenState extends State<CatalogScreen> {
       ? widget.session.unreadNotifications
       : 0;
 
+  Future<void> _nearby() async {
+    final lat = TextEditingController(text: nearbyLat?.toString());
+    final lng = TextEditingController(text: nearbyLng?.toString());
+    final radius = TextEditingController(text: '$nearbyRadius');
+    String? error;
+    final route = DialogRoute<List<double>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          scrollable: true,
+          title: const Text('Buscar cerca de un punto'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Coordenadas aproximadas para esta búsqueda. No se guardan en tu perfil.',
+              ),
+              for (final entry in [
+                (lat, 'Latitud'),
+                (lng, 'Longitud'),
+                (radius, 'Radio en km (hasta 200)'),
+              ])
+                TextField(
+                  controller: entry.$1,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                  decoration: InputDecoration(labelText: entry.$2),
+                ),
+              ErrorNotice(error),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final a = double.tryParse(lat.text),
+                    b = double.tryParse(lng.text),
+                    c = double.tryParse(radius.text);
+                if (a == null ||
+                    b == null ||
+                    c == null ||
+                    !a.isFinite ||
+                    !b.isFinite ||
+                    !c.isFinite ||
+                    a.abs() > 90 ||
+                    b.abs() > 180 ||
+                    c <= 0 ||
+                    c > 200) {
+                  update(() => error = 'Revisa las coordenadas y el radio.');
+                  return;
+                }
+                Navigator.pop(context, [a, b, c]);
+              },
+              child: const Text('Buscar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final result = await Navigator.of(context).push(route);
+    await route.completed;
+    lat.dispose();
+    lng.dispose();
+    radius.dispose();
+    if (!mounted || result == null) return;
+    setState(() {
+      nearbyLat = result[0];
+      nearbyLng = result[1];
+      nearbyRadius = result[2];
+    });
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     drawer: Drawer(
@@ -132,6 +220,21 @@ class _CatalogScreenState extends State<CatalogScreen> {
             ),
             const Divider(),
             for (final item in <(String, IconData, Widget)>[
+              (
+                'Carrito',
+                Icons.shopping_cart_outlined,
+                CartScreen(widget.session.api),
+              ),
+              (
+                'Teléfono y cobros',
+                Icons.phone_outlined,
+                PaymentSettingsScreen(widget.session.api),
+              ),
+              (
+                'Privacidad y términos',
+                Icons.privacy_tip_outlined,
+                LegalScreen(widget.session),
+              ),
               (
                 'Favoritos',
                 Icons.favorite_border,
@@ -271,6 +374,22 @@ class _CatalogScreenState extends State<CatalogScreen> {
                               icon: const Icon(Icons.inventory_2_outlined),
                               label: const Text('Mis publicaciones'),
                             ),
+                            OutlinedButton.icon(
+                              onPressed: _nearby,
+                              icon: const Icon(Icons.near_me_outlined),
+                              label: const Text('Cerca de un punto'),
+                            ),
+                            if (nearbyLat != null)
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    nearbyLat = null;
+                                    nearbyLng = null;
+                                  });
+                                  _load();
+                                },
+                                child: const Text('Quitar cercanía'),
+                              ),
                           ],
                         ),
                         const SizedBox(height: 20),
@@ -337,6 +456,37 @@ class _CatalogScreenState extends State<CatalogScreen> {
                             setState(() => tipo = v ?? '');
                             _load();
                           },
+                        ),
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<String>(
+                          key: const Key('catalog-sort'),
+                          initialValue: sort,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: nearbyLat == null
+                                ? 'Ordenar por'
+                                : 'Orden por distancia activo',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'nuevo',
+                              child: Text('Más recientes'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'barato',
+                              child: Text('Menor precio'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'caro',
+                              child: Text('Mayor precio'),
+                            ),
+                          ],
+                          onChanged: nearbyLat != null
+                              ? null
+                              : (value) {
+                                  setState(() => sort = value ?? 'nuevo');
+                                  _load();
+                                },
                         ),
                         const SizedBox(height: 18),
                         Text(
@@ -437,7 +587,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            post.typeLabel,
+                                            '${post.featured ? '★ ' : ''}${post.typeLabel}${post.distanceKm == null ? '' : ' · ${post.distanceKm!.toStringAsFixed(1)} km'}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
                                               color: forest,
                                               fontSize: 11,

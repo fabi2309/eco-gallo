@@ -193,7 +193,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(reads, before + 1);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    await tester.pump(const Duration(seconds: 31));
+    await tester.pump(const Duration(seconds: 6));
     await tester.pumpAndSettle();
     expect(reads, before + 1);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
@@ -232,7 +232,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(reads, 1);
     expect(find.text('2'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 31));
+    await tester.pump(const Duration(seconds: 6));
     await tester.pumpAndSettle();
     expect(reads, 2);
     expect(find.text('4'), findsOneWidget);
@@ -281,7 +281,8 @@ void main() {
     );
     await tester.pumpWidget(MaterialApp(home: ChatScreen(api, 2, 2)));
     await tester.pumpAndSettle();
-    await tester.pump(const Duration(seconds: 8));
+    await tester.pump(const Duration(seconds: 1));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     await tester.enterText(
       find.byKey(const Key('chat-input')),
       'Mensaje nuevo',
@@ -302,6 +303,7 @@ void main() {
     expect(reads, 3);
     expect(find.text('Mensaje nuevo'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     api.close();
   });
 }

@@ -1,6 +1,7 @@
 import { api } from "../api.js";
-import { esc, icon, money, timeAgo, avatar, badges, ask, toast, TIPO } from "../ui.js";
+import { esc, icon, money, timeAgo, avatar, badges, ask, toast, TIPO, choosePayment } from "../ui.js";
 import { openLightbox } from "../zoom.js";
+import { prepareCardPayment } from "../payflow.js";
 
 export async function render(root, { args, state, go, refresh }) {
   const { post: p } = await api.get(`/api/posts/${args[0]}`);
@@ -21,6 +22,8 @@ export async function render(root, { args, state, go, refresh }) {
       <div class="big">${venta ? money(p.price_cents) : p.tipo === "donacion" ? "Gratis" : "Se intercambia"}</div>
       <p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(p.description)}</p>
       <div class="muted small">${esc(p.centro)} · publicado ${timeAgo(p.created_at)}</div>
+      ${p.meeting && (p.meeting.place || p.meeting.lat != null) ? `<div class="meetinfo small">${icon("pin")} <span>Entrega: <b>${esc(p.meeting.place || "por acordar")}</b>${p.meeting.lat != null
+        ? ` · <a href="https://www.openstreetmap.org/?mlat=${p.meeting.lat}&mlon=${p.meeting.lng}#map=17/${p.meeting.lat}/${p.meeting.lng}" target="_blank" rel="noopener noreferrer">ver en el mapa</a> <span class="muted">(aprox.)</span>` : ""}</span></div>` : ""}
       <div class="seller">${avatar(p.author)}
         <div class="grow"><b>${esc(p.author.name)}</b>${badges(p.author, {}) ? `<div class="insignias-row">${badges(p.author)}</div>` : ""}<div class="muted small">${esc(p.author.carrera || p.author.centro)}</div>
         ${p.author.bio ? `<div class="small bio">${esc(p.author.bio)}</div>` : ""}</div></div>
@@ -61,10 +64,17 @@ export async function render(root, { args, state, go, refresh }) {
       ${p.live_order ? `<a class="btn accent block" href="#/order/${p.live_order.id}">${icon("shield")} Ver el pago retenido</a>` : ""}
       ${p.status === "pending" ? `<div class="notice">${icon("shield")} Tu publicación está <b>en revisión</b>: se mostrará en el catálogo cuando un administrador la apruebe.</div>` : ""}
       ${p.status === "paused" ? `<div class="notice">${icon("pause")} Tu publicación está <b>pausada</b>: nadie la ve en el catálogo hasta que la reanudes.</div>` : ""}
+      ${p.status === "active" ? (p.featured
+        ? `<div class="notice">${icon("star")} Destacada hasta el ${new Date(p.featured_until * 1000).toLocaleString("es-MX", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}: aparece primero en el catálogo.</div>`
+        : `<button class="btn ghost block" id="feature">${icon("star")} Destacar gratis por 3 días</button>`) : ""}
       ${p.status === "active" || p.status === "paused" ? `<div class="row wrap"><a class="btn ghost grow" href="#/edit/${p.id}">Editar</a>
         <button class="btn ghost grow" id="pause">${p.status === "paused" ? `${icon("play")} Reanudar` : `${icon("pause")} Pausar`}</button>
         ${venta || p.status === "paused" ? "" : '<button class="btn green grow" id="close">Marcar como entregado</button>'}
         <button class="btn ghost grow" id="del">Eliminar</button></div>` : ""}`;
+    act.querySelector("#feature")?.addEventListener("click", async () => {
+      if (!(await ask({ title: "¿Destacar esta publicación?", text: "Aparecerá primero en el catálogo durante 3 días. Puedes tener una destacada a la vez y volver a destacar la misma después de una semana.", confirm: "Destacar" }))) return;
+      try { await api.post(`/api/posts/${p.id}/feature`); toast("Tu publicación está destacada"); refresh(); } catch (e) { toast(e.message, true); }
+    });
     act.querySelector("#pause")?.addEventListener("click", async () => {
       try { await api.post(`/api/posts/${p.id}/pause`, { paused: p.status !== "paused" }); toast(p.status === "paused" ? "Publicación reanudada" : "Publicación pausada"); refresh(); }
       catch (e) { toast(e.message, true); }
@@ -93,36 +103,36 @@ export async function render(root, { args, state, go, refresh }) {
     };
   }
 
-  if (venta && p.status === "active" && state.meta.payment_mode !== "disabled") {
+  if (venta && p.status === "active") {
+    const online = (state.meta.payment_methods || []).includes("en_linea");
     act.innerHTML = `
-      <div class="promise"><strong>${icon("shield")} Pago protegido</strong>
-        <span>Tu dinero se queda retenido en ECO-GALLO y solo se entrega al vendedor cuando tú confirmas que recibiste el artículo.</span></div>
-      <button class="btn block" id="buy">${icon("lock")} Comprar con pago protegido · ${money(p.price_cents)}</button>
+      <div class="promise"><strong>${icon("shield")} Dos formas de pago</strong>
+        <span>${online ? `<b>Tarjeta:</b> tu dinero queda retenido y el vendedor lo recibe cuando confirmas que te entregó${p.accepts_card ? "" : " (este vendedor aún no la acepta)"}. ` : ""}<b>Efectivo:</b> apartas el artículo y pagas en mano al recibirlo en el campus.</span></div>
+      <button class="btn block" id="buy">${icon("bag")} Comprar · ${money(p.price_cents)}</button>
+      <button class="btn ghost block" id="addcart">${icon("bag")} Agregar al carrito</button>
       <a class="btn ghost block" href="#/chat/${p.id}/${p.author.id}">${icon("chat")} Preguntar al vendedor</a>`;
-    act.querySelector("#buy").onclick = async () => {
-      const ok = await ask({
-        title: `Pagar ${money(p.price_cents)}`,
-        text: state.meta.payment_mode === "live" ? "Stripe procesa el pago. Confirma la recepción únicamente cuando tengas el artículo. Puedes abrir una disputa antes de liberar los fondos." : "Prueba del flujo de compra: no se cobra ni transfiere dinero real.",
-        confirm: "Pagar y retener",
-      });
-      if (!ok) return;
-      try {
-  const r = await api.post("/api/orders", { post_id: p.id });
-
-  if (r.checkout_url) {
-    window.location.assign(r.checkout_url);
-    return;
-  }
-
-  toast("Pago retenido. Coordina la entrega por mensaje.");
-  go(`#/order/${r.id}`);
-} catch (e) {
-  toast(e.message, true);
-  if (e.data?.id) go(`#/order/${e.data.id}`); else refresh();
-}
+    act.querySelector("#addcart").onclick = async () => {
+      try { await api.post("/api/cart", { post_id: p.id }); toast("Agregado al carrito"); go("#/cart"); } catch (e) { toast(e.message, true); }
     };
-  } else if (venta && p.status === "active" && state.meta.payment_mode === "disabled") {
-    act.innerHTML = `<div class="notice">Los pagos en línea aún no están habilitados.</div><a class="btn block" href="#/chat/${p.id}/${p.author.id}">Contactar al vendedor</a>`;
+    act.querySelector("#buy").onclick = async () => {
+      const method = await choosePayment({ meta: state.meta, total: p.price_cents, acceptsCard: p.accepts_card });
+      if (!method) return;
+      let card = null;
+      if (method === "en_linea") {
+        const prep = await prepareCardPayment(state, p.price_cents);
+        if (!prep) return;
+        card = prep.card;
+      }
+      try {
+        const r = await api.post("/api/orders", { post_id: p.id, method, ...(card ? { card } : {}) });
+        if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
+        toast(method === "efectivo" ? "Artículo apartado. Coordina la entrega y paga al recibirlo." : "Pago retenido. Coordina la entrega por mensaje.");
+        go(`#/order/${r.id}`);
+      } catch (e) {
+        toast(e.message, true);
+        if (e.data?.id) go(`#/order/${e.data.id}`); else refresh();
+      }
+    };
   } else if (p.status === "active") {
     act.innerHTML = `<a class="btn block" href="#/chat/${p.id}/${p.author.id}">${icon("chat")} Contactar para ${p.tipo === "donacion" ? "pedirlo" : "proponer un trueque"}</a>
       <p class="muted small">Las donaciones y los trueques se acuerdan por mensaje y no usan pago.</p>`;

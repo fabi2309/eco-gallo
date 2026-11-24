@@ -1,8 +1,24 @@
 # ECO-GALLO móvil — Android
 
-Cliente Flutter del backend Flask existente. Incluye acceso por contraseña, código de correo y segundo factor cuando la cuenta lo requiere; perfil; catálogo y publicaciones con fotos; favoritos y deseos; mensajes; notificaciones; compras y ventas simuladas; saldo, actividad e impacto. «Mis publicaciones» permite editar, pausar, reanudar, retirar y cerrar donaciones o trueques entregados.
+Cliente Flutter del backend Flask existente. Incluye acceso por contraseña, código de correo y segundo factor cuando la cuenta lo requiere; perfil; catálogo y publicaciones con fotos; favoritos y deseos; mensajes; notificaciones; carrito; compras en efectivo y simuladas; saldo, actividad e impacto mensual con ahorro estimado. «Mis publicaciones» permite editar, pausar, reanudar, retirar, destacar gratuitamente y cerrar donaciones o trueques entregados; también muestra visitas, contactos e interesados.
 
-El panel administrativo, los documentos de egresados, el cambio de contraseña y la configuración del segundo factor se gestionan desde la web. El móvil permite autenticarse con el segundo factor ya configurado. Este proyecto incluye Android; iOS, notificaciones push y publicación en tiendas no están configurados. Las notificaciones disponibles son internas de la app.
+El panel administrativo, los documentos de egresados, el acceso Microsoft, el cambio de contraseña y la configuración del segundo factor se gestionan desde la web. El móvil permite autenticarse con el segundo factor ya configurado. La búsqueda cercana usa coordenadas aproximadas introducidas manualmente; no solicita permisos GPS. Este proyecto incluye Android; iOS, notificaciones push y publicación en tiendas no están configurados. Las notificaciones disponibles son internas de la app.
+
+## Versión integrada: datos principales por USB
+
+1. Detén el servidor anterior desde su terminal. En la raíz del proyecto ejecuta `./servidor_movil.bat --usb --codigos-locales` y deja esa terminal abierta. Utiliza `data/ecogallo.sqlite`, hace un respaldo previo en `data/backups/`, no agrega cuentas de demo y conserva las contraseñas existentes. Desactiva proveedores de pago externos y la lectura de `.env`.
+2. Conecta el teléfono con un cable de datos, activa Depuración USB y acepta la autorización de esta computadora. Ejecuta `./conectar_movil_usb.bat`; si también está abierto el emulador, indica el serial del teléfono como argumento.
+3. Instala **una vez por actualización** el archivo `artifacts/mobile/ECO-GALLO-local.apk`, generado con `./crear_apk_local.bat`. Puedes enviarlo por cable y abrirlo desde Archivos, permitiendo la instalación desde esa aplicación. También puedes instalarlo con `adb -s SERIAL install -r artifacts/mobile/ECO-GALLO-local.apk`. Al sustituir la versión anterior se conserva la misma firma de pruebas de esta computadora.
+4. En ECO-GALLO configura `http://127.0.0.1:8080` e inicia sesión con una cuenta del proyecto principal. Web y móvil muestran los mismos registros del servidor. El teléfono no necesita un gestor de base de datos ni recibe una copia de SQLite.
+5. Al reconectar el cable o reiniciar el teléfono repite solo el arranque del servidor, si estaba apagado, y `./conectar_movil_usb.bat`. No hay que recompilar ni reinstalar el APK cada vez y no se abren reglas de firewall.
+
+`--codigos-locales` muestra códigos ficticios de correo y teléfono, sin enviar SMS ni correos reales, exclusivamente con `--usb` y escucha en loopback. Úsalo para la tesina con teléfonos y referencias ficticios. Sin esa opción, el acceso por contraseña sigue disponible, pero confirmar teléfonos nuevos necesita SMS configurado. Este modo local no es un despliegue público.
+
+Al primer acceso acepta la versión vigente de los términos. En **Privacidad y términos** puedes leer ambos documentos, consultar/copiar tus datos y solicitar la baja con confirmación escrita, contraseña y 2FA cuando corresponda. El servidor impide la baja con operaciones abiertas.
+
+Para probar compras sin teléfono ni referencia de cobro selecciona **Efectivo al entregar**, que es la opción predeterminada. El material queda reservado; el vendedor confirma el cobro al entregar o se cancela la reserva. Para probar **Tarjeta ficticia · simulación**, comprador y vendedor confirman un número ficticio en **Teléfono y cobros**; el vendedor guarda una referencia ficticia (titular, tipo y cuatro dígitos). Al comprar usa, por ejemplo, titular «Persona de prueba», últimos cuatro «4242» y vencimiento futuro. No introduzcas número completo, CVV, cuenta real ni RFC. Configurar estas referencias no habilita transferencias.
+
+Prueba también agregar varios artículos al **Carrito**, el punto de entrega y precio nuevo opcionales al publicar, destacar una publicación propia aprobada, ordenar por precio y **Cerca de un punto** con coordenadas aproximadas. Los cambios quedan sujetos a las mismas validaciones y revisión del servidor web.
 
 ## Probar en Windows con el emulador
 
@@ -18,7 +34,7 @@ Si aparece «sin conexión», comprueba que la primera terminal siga mostrando `
 
 El servidor demo conserva sus datos en `data/mobile-demo/`, separado de `data/ecogallo.sqlite`; no elimina ni migra los datos habituales. Solo escucha en 127.0.0.1:8080. Si el puerto está ocupado, detén desde su terminal el otro servidor antes de arrancar la demo. La web de esta misma demo se puede abrir en http://127.0.0.1:8080.
 
-Para usar tus datos habituales, arranca `./run_dev.bat` en lugar de `./run_mobile_demo.bat` y usa una cuenta existente. Ejecuta solo uno de los dos servidores a la vez. Los cambios de perfil desde móvil se comparten con la web del servidor elegido.
+Para usar tus datos habituales, arranca `./servidor_movil.bat --usb --codigos-locales` en lugar de `./run_mobile_demo.bat` y usa una cuenta existente. Ejecuta solo uno de los dos servidores a la vez. Los cambios de perfil desde móvil se comparten con la web del servidor elegido.
 
 ## Probar publicaciones con fotos y revisión
 
@@ -44,7 +60,7 @@ Reinicia el servidor con `./run_mobile_demo.bat` y la aplicación con `./run_mob
 
 - **Favoritos:** abre un material y pulsa el corazón. Desde el menú puedes consultarlo o quitarlo. Si el material vuelve a revisión o deja de estar disponible, se muestra sin revelar contenido privado y todavía puedes quitarlo.
 - **Deseos:** agrega un término y, opcionalmente, categoría y centro. Cuando se apruebe una publicación coincidente, aparecerá un aviso en Notificaciones.
-- **Mensajes:** pulsa **Contactar** en una publicación ajena. La conversación admite hasta 1000 caracteres por mensaje y sugerencias de puntos de encuentro. Se actualiza cada 8 segundos solo mientras la conversación está visible y la app está en primer plano; también puedes usar Actualizar. La bandeja muestra los mensajes sin leer. Los textos se conservan en el campo si falla el envío.
+- **Mensajes:** pulsa **Contactar** en una publicación ajena. La conversación admite hasta 1000 caracteres por mensaje y sugerencias de puntos de encuentro. Consulta cambios incrementales cada segundo solo mientras la conversación está visible y la app está en primer plano, y muestra «Visto» cuando la otra persona leyó el mensaje. También puedes usar Actualizar. La bandeja muestra los mensajes sin leer. Los textos se conservan en el campo si falla el envío.
 - **Notificaciones:** abre el destino de un aviso o pulsa **Marcar estas como leídas**. Los destinos del catálogo, pedidos y conversaciones se abren en pantallas nativas; los avisos administrativos se consultan en la web.
 - **Perfil:** cambia nombre, carrera, biografía y fotografía. La imagen admite hasta 2 MB; el centro académico se deriva de la carrera. La configuración de seguridad permanece en la web.
 
@@ -53,12 +69,12 @@ Para probar ambas partes de una operación con un solo emulador:
 1. En el móvil entra con **movil@edu.uaa.mx** / **EcoGalloDemo123**.
 2. En el navegador del equipo entra con **companero-demo@edu.uaa.mx** / **EcoGalloDemo123**. Es otra cuenta ficticia que solo se crea al iniciar el servidor demo aislado.
 3. Busca **Libro para probar pedidos** en el móvil. Esta publicación ficticia se crea una sola vez junto con la segunda cuenta. Prueba Contactar y responde desde la web.
-4. Desde el detalle pulsa **Comprar · pago simulado** y confirma. Se reserva el artículo y aparece un pedido con pago ficticio retenido. No se pide tarjeta, RFC ni banco.
+4. Desde el detalle pulsa **Comprar · elegir forma de pago**. En la pantalla siguiente puedes elegir efectivo o tarjeta ficticia. Para esta última completa primero teléfono confirmado y referencia ficticia del vendedor en ambas cuentas como se explica arriba; selecciona **Tarjeta ficticia · simulación**, introduce solo titular, últimos cuatro y vencimiento ficticios y confirma. Se reserva el artículo y aparece un pedido con pago ficticio retenido. No se pide RFC ni cuenta bancaria completa.
 5. Desde la web del vendedor marca la entrega. En el móvil actualiza el pedido y pulsa **Confirmar recepción**. El artículo queda vendido y el saldo ficticio aparece en la cuenta del vendedor.
 6. Con otras publicaciones de prueba, revisa las alternativas: el vendedor puede reembolsar; el comprador puede abrir una disputa con un motivo de al menos diez caracteres. La cuenta **revision@edu.uaa.mx** / **EcoGalloRevision123** resuelve las disputas desde la administración web.
 7. En una donación o trueque propio aprobado, usa **Marcar entregado** desde Mis publicaciones; no se crea un pago. Revisa su efecto en Actividad e Impacto.
 
-El detalle del pedido muestra únicamente las acciones autorizadas por el servidor para tu cuenta y estado. Las operaciones de pago enviadas por el móvil llevan una restricción de simulación que el servidor valida antes de contactar cualquier proveedor externo. Si te conectas a un servidor con Stripe, el móvil no ofrece comprar ni ejecutar acciones financieras; esa gestión corresponde a la web. No se abren automáticamente enlaces de checkout ni se integran claves de pago en el APK.
+El detalle del pedido muestra únicamente las acciones autorizadas por el servidor para tu cuenta y estado. Las operaciones de pago enviadas por el móvil llevan una restricción de simulación que el servidor valida antes de contactar cualquier proveedor externo. Si te conectas a un servidor con Stripe o Mercado Pago, el móvil permite efectivo, pero el pago en línea y sus acciones financieras corresponden a la web. No se abren automáticamente enlaces de checkout ni se integran claves de pago en el APK.
 
 Si se corta la conexión al confirmar una operación, actualiza su detalle antes de repetirla. Los estados y las autorizaciones del backend determinan el resultado; no se muestra una confirmación de éxito sin respuesta del servidor.
 
@@ -112,15 +128,15 @@ El recorrido de comunidad y pedidos utiliza la misma infraestructura temporal:
 
 Comprueba favoritos, chat entre cuentas distintas, avisos de deseos y lectura de notificaciones, edición de perfil y avatar, actividad, impacto, saldo, compra y confirmación, reembolso, disputa y resolución, y cierre de una donación. Verifica que un tercero no pueda consultar pedidos y que un comprador no ejecute acciones del vendedor. Las operaciones se realizan exclusivamente sobre cuentas y base temporales del puerto 8081.
 
-## Revisión de estabilidad móvil (23 de noviembre de 2026)
+## Revisión de estabilidad móvil
 
 La app admite vertical y horizontal sin bloquear el giro. Se corrigieron desbordamientos del acceso, la verificación pendiente y el chat con poco espacio, teclado o texto grande. Los borradores de los formularios y del chat permanecen al girar mientras el proceso siga abierto. Se evita duplicar rutas y confirmaciones mediante toques repetidos; enfocar un campo sin cambiar su texto ya no marca el formulario como modificado.
 
-Los contadores de mensajes y notificaciones se actualizan cada 30 segundos y al volver a la app. Las bandejas abiertas se consultan cada 15 segundos y el chat cada 8; las consultas periódicas se suspenden en segundo plano y las de cada bandeja también al abrir otra pantalla. Leer una conversación o una notificación actualiza los contadores. Abrir una notificación marca únicamente esa; «Marcar estas como leídas» afecta a las que ya se muestran, hasta 50, sin marcar avisos nuevos que lleguen durante la petición. La API verifica que pertenezcan a la cuenta autenticada.
+Los contadores de mensajes y notificaciones se actualizan cada cinco segundos y al volver a la app. Las bandejas abiertas se consultan cada 15 segundos y el chat cada segundo mediante cambios incrementales; las consultas periódicas se suspenden en segundo plano y las de cada bandeja también al abrir otra pantalla. Leer una conversación o una notificación actualiza los contadores. Abrir una notificación marca únicamente esa; «Marcar estas como leídas» afecta a las que ya se muestran, hasta 50, sin marcar avisos nuevos que lleguen durante la petición. La API verifica que pertenezcan a la cuenta autenticada.
 
 Cerrar sesión sin red elimina el acceso y las credenciales de memoria del dispositivo, y muestra que no pudo confirmar la revocación en el servidor. Las respuestas de una sesión o conexión anterior se descartan. Se impiden avisos a controladores ya cerrados y se rechazan imágenes con direcciones inválidas, credenciales o un origen externo. El chat solicita una vista nueva después de enviar si había un sondeo anterior pendiente, para mostrar el mensaje enviado.
 
-La verificación local incluye 39 pruebas Flutter y una matriz de 256 casos: 16 pantallas, cuatro tamaños/orientaciones, texto normal o al 180 %, y teclado visible u oculto. El análisis estático no reporta incidencias. Las 79 pruebas seleccionadas del servidor comprueban, entre otros controles, permisos, CSRF y lectura selectiva de notificaciones. Estas comprobaciones acotan los casos revisados; no certifican ausencia total de fallos ni sustituyen probar un teléfono físico.
+La verificación local incluye 47 pruebas Flutter y una matriz de 336 casos: 21 pantallas, cuatro tamaños/orientaciones, texto normal o al 180 %, y teclado visible u oculto. Las pruebas del servidor comprueban, entre otros controles, permisos, CSRF, proveedores de pagos y lectura selectiva de notificaciones. Estas comprobaciones acotan los casos revisados; no certifican ausencia total de fallos ni sustituyen probar un teléfono físico.
 
 Para repetir la prueba Android de giro real y cierre de sesión sin conexión:
 
@@ -130,7 +146,7 @@ Para repetir la prueba Android de giro real y cierre de sesión sin conexión:
 
 Utiliza cuentas y servidor temporales de 8081, gira Android mediante Flutter, conserva un borrador, descarta el formulario y comprueba que salir sin red no deja una cookie de acceso. Solicita el teclado del sistema y registra su espacio visible; con el teclado físico del equipo el emulador puede no desplegar el virtual. La matriz de pruebas local sí reserva el espacio del teclado virtual en ambas orientaciones.
 
-En esta revisión pasaron los tres recorridos Android: `stability`, `community` y `posts`. El selector de imágenes se sustituye por archivos de prueba en los recorridos automatizados; el selector nativo tiene la comprobación adicional descrita arriba. Las pruebas no modifican los datos del servidor demo de 8080.
+Los recorridos Android disponibles son `stability`, `community`, `posts` y `extended`. El último prueba aceptación de términos, confirmación de teléfono con código local, referencia ficticia, carrito, efectivo, cancelación, tarjeta ficticia y consulta de datos personales. Se ejecuta con `.venv/Scripts/python.exe tools/test_mobile_posts.py emulator-5554 extended`. El selector de imágenes se sustituye por archivos de prueba en los recorridos automatizados; el selector nativo tiene la comprobación adicional descrita arriba. Las pruebas no modifican los datos del servidor demo de 8080.
 
 Después de actualizar estos archivos, reinicia el backend demo con `./run_mobile_demo.bat` para cargar la lectura selectiva de notificaciones y vuelve a ejecutar `./run_mobile.bat`. Los avisos son internos: recibirlos en la barra de Android o con la app cerrada requeriría integrar notificaciones push, que no forma parte de esta demo.
 

@@ -1,6 +1,7 @@
 import { api } from "../api.js";
 import { esc, icon, toast, carreraOptions, bindCentro, pwField, wirePw, pwProblem } from "../ui.js";
 import { state } from "../main.js";
+import { consentBox } from "./legal.js";
 
 const LEAVES = `<svg class="leaves" viewBox="0 0 400 400" aria-hidden="true">
   <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -31,7 +32,17 @@ const domText = () => domains().map((d) => "@" + d).join(" o ");
 const isInstitutional = (mail) => domains().some((d) => new RegExp("^[a-z0-9][a-z0-9._%+-]*@" + d.replace(/\./g, "\\.") + "$").test(mail));
 const errBox = (m) => (m ? `<div class="error" role="alert">${esc(m)}</div>` : "");
 
-export function render(root, { onDone }) {
+const MS_ERRORS = {
+  "cuenta-no-uaa": "Esa cuenta de Microsoft no es de la UAA. Usa tu correo institucional (por ejemplo al350114@edu.uaa.mx).",
+  "cancelado": "Cancelaste el inicio de sesión con Microsoft.",
+  "vencido": "El inicio de sesión con Microsoft tardó demasiado. Inténtalo de nuevo.",
+  "suspendida": "Tu cuenta está suspendida. Contacta a la administración.",
+  "microsoft": "No pudimos comunicarnos con Microsoft. Intenta de nuevo en un momento.",
+  "no-configurado": "El acceso con Microsoft no está disponible en este servidor.",
+};
+const MS_LOGO = `<svg viewBox="0 0 21 21" width="18" height="18" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>`;
+
+export function render(root, { onDone, oauth = null }) {
   let email = "", cooldown = 0, timer = null;
   const box = shellLogin(root);
   const meta = () => state.meta;
@@ -41,6 +52,8 @@ export function render(root, { onDone }) {
     clearInterval(timer);
     box().innerHTML = `
       <h2>Inicia sesión</h2>
+      ${meta().microsoft_login ? `<a class="btn ms block" href="/api/auth/microsoft/start">${MS_LOGO} Entrar con mi cuenta UAA (Microsoft)</a>
+      <div class="or"><span>o con correo y contraseña</span></div>` : ""}
       <form id="f" class="stack" novalidate>
         <label class="field">Correo
           <input class="input" name="email" type="email" inputmode="email" autocomplete="username" placeholder="al350114@${domains()[0]}" value="${esc(email)}" required autofocus>
@@ -54,7 +67,8 @@ export function render(root, { onDone }) {
       <div class="stack">
         <button class="btn ghost block" id="newstudent">${icon("user")} Crear cuenta con mi correo institucional</button>
         <button class="btn ghost block" id="newalumni">${icon("shield")} Soy egresado de la UAA</button>
-      </div>`;
+      </div>
+      <p class="muted small legal-links"><a href="#/privacidad">Aviso de privacidad</a> · <a href="#/terminos">Términos de uso</a></p>`;
     wirePw(box());
     box().querySelector("#f").onsubmit = async (e) => {
       e.preventDefault();
@@ -197,7 +211,7 @@ export function render(root, { onDone }) {
     box().innerHTML = `
       <h2>Revisa tu correo</h2>
       <p class="muted">Enviamos un código a <b>${esc(email)}</b>. Vence en ${Math.round((r.ttl || 600) / 60)} minutos.</p>
-      ${r.dev_code ? `<div class="devcode">Modo de pruebas (sin SMTP): tu código es <b>${esc(r.dev_code)}</b></div>` : ""}
+      ${r.dev_code ? `<div class="devcode">Tu código de acceso es <b>${esc(r.dev_code)}</b></div>` : ""}
       <form id="f" class="stack" novalidate>
         <div class="codebox" id="cells" aria-label="Código de 6 dígitos">
           ${[0, 1, 2, 3, 4, 5].map((i) => `<input inputmode="numeric" autocomplete="${i ? "off" : "one-time-code"}" maxlength="1" aria-label="Dígito ${i + 1}">`).join("")}
@@ -287,6 +301,7 @@ if (res.needs_profile) {
           <input class="input file" type="file" name="document" accept="image/jpeg,image/png,image/webp,application/pdf" required></label>
         ${pwField("password", "Crea una contraseña", { hint: `(mín. ${m.password_min}, con letras y un número)` })}
         ${pwField("password2", "Repite la contraseña")}
+        ${consentBox(m.legal.version)}
         ${errBox(msg)}
         <button class="btn block">Enviar para revisión</button>
         <p class="muted small">${icon("lock")} Tu documento solo lo ve el equipo de administración y se borra en cuanto se resuelve la solicitud.</p>
@@ -308,6 +323,7 @@ if (res.needs_profile) {
       const pw = fd.get("password"); const bad = pwProblem(pw, m.password_min);
       if (bad) return back(bad);
       if (pw !== fd.get("password2")) return back("Las contraseñas no coinciden.");
+      if (!fd.get("accept_terms")) return back("Para registrarte acepta el aviso de privacidad y los términos de uso.");
       fd.delete("password2");
       email = String(fd.get("email")).trim().toLowerCase();
       const btn = e.submitter; btn.disabled = true; btn.textContent = "Enviando…";
@@ -316,7 +332,8 @@ if (res.needs_profile) {
     };
   }
 
-  stepPassword();
+  if (oauth && oauth.totp) stepTotp(oauth.totp);
+  else stepPassword(oauth && oauth.error ? (MS_ERRORS[oauth.error] || "No se pudo iniciar sesión con Microsoft.") : "");
 }
 
 // ------------------------------------------------------------ primer perfil (estudiantes)
@@ -335,6 +352,7 @@ export function renderProfile(root, { onDone }) {
         ${pwField("password", "Contraseña", { hint: `(mín. ${m.password_min}, letras y un número)` })}
         ${pwField("password2", "Repite la contraseña")}
       </div>
+      ${consentBox(m.legal.version)}
       <div id="err"></div>
       <button class="btn block">Empezar</button>
     </form>`);
@@ -346,12 +364,14 @@ export function renderProfile(root, { onDone }) {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(f));
     if (!fd.carrera) return show("Elige tu carrera de la lista.");
+    if (!fd.accept_terms) return show("Para continuar acepta el aviso de privacidad y los términos de uso.");
     if (fd.password || fd.password2) {
       const bad = pwProblem(fd.password, m.password_min);
       if (bad) return show(bad);
       if (fd.password !== fd.password2) return show("Las contraseñas no coinciden.");
     }
     try {
+      await api.post("/api/me/terms", { accept: true, version: m.legal.version });
       const r = await api.put("/api/me", { name: fd.name, carrera: fd.carrera });
       state.user = r.user;
       if (fd.password) {

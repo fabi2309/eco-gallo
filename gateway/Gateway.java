@@ -122,11 +122,14 @@ public class Gateway {
             String k = h.getKey();
             if (k == null) continue;
             String lk = k.toLowerCase();
-            if (HOP.contains(lk) || lk.equals("x-real-ip") || lk.equals("x-forwarded-for") || lk.equals("x-ecogallo-proxy")) continue;
+            if (HOP.contains(lk) || lk.equals("x-real-ip") || lk.equals("x-forwarded-for")
+                    || lk.equals("x-forwarded-host") || lk.equals("x-ecogallo-proxy")) continue;
             for (String v : h.getValue()) rb.header(k, v);
         }
         String proxyToken = System.getenv().getOrDefault("ECOGALLO_PROXY_TOKEN", "");
         if (!proxyToken.isEmpty()) rb.header("X-Ecogallo-Proxy", proxyToken);
+        String originalHost = ex.getRequestHeaders().getFirst("Host");
+        if (originalHost != null) rb.header("X-Forwarded-Host", originalHost);
         rb.header("X-Real-IP", clientIp(ex)); // el backend confía solo en este valor
         boolean hasBody = body.length > 0 || method.equals("POST") || method.equals("PUT") || method.equals("PATCH");
         rb.method(method, hasBody ? HttpRequest.BodyPublishers.ofByteArray(body) : HttpRequest.BodyPublishers.noBody());

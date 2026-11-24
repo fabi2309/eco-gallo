@@ -13,6 +13,10 @@ class CatalogRepository {
     String tipo = '',
     int page = 1,
     bool mine = false,
+    double? latitude,
+    double? longitude,
+    double radius = 10,
+    String sort = 'nuevo',
   }) async => PostPage.fromJson(
     await api.get('/api/posts', {
       'q': query,
@@ -21,6 +25,12 @@ class CatalogRepository {
       'page': '$page',
       'per_page': '20',
       if (mine) 'mine': '1',
+      'sort': sort,
+      if (latitude != null && longitude != null) ...{
+        'lat': '$latitude',
+        'lng': '$longitude',
+        'radius_km': '$radius',
+      },
     }),
   );
   Future<Post> detail(int id) async => Post.fromJson(

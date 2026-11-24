@@ -1,4 +1,5 @@
 """Publicaciones, búsqueda y subida de imágenes."""
+import math
 import re
 import uuid
 import difflib
@@ -105,7 +106,14 @@ def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
                    "bio": row["author_bio"], "badges": compute_badges(row),
                    "avatar": f"/uploads/{row['author_avatar']}" if row["author_avatar"] else ""},
         "images": [f"/uploads/{n}" for n in images],
+        "meeting": {"place": row.get("meet_place", ""), "lat": row.get("meet_lat"), "lng": row.get("meet_lng")},
+        "new_price_cents": row.get("new_price_cents", 0),
+        "featured": (row.get("featured_until") or 0) > now(),
+        "featured_until": row.get("featured_until") or 0,
+        "accepts_card": bool(row.get("author_card_ready")),
     }
+    if row.get("distance_km") is not None:
+        out["distance_km"] = round(row["distance_km"], 1)
     if stats is not None:
         out["stats"] = stats
     elif "views_count" in row:
@@ -119,6 +127,7 @@ def serialize(row: dict, images: list[str], stats: dict | None = None) -> dict:
 
 BASE_SELECT = f"""SELECT p.*, u.name AS author_name, u.carrera AS author_carrera,
                         u.centro AS author_centro, u.bio AS author_bio, u.avatar AS author_avatar,
+                        (u.phone_verified_at>0 AND u.payout_last4!='') AS author_card_ready,
                         {BADGE_COLS}
                  FROM posts p JOIN users u ON u.id = p.author_id"""  # nosec B608 - BADGE_COLS es constante
 
@@ -137,13 +146,19 @@ def images_for(db, ids: list[int]) -> dict[int, list[str]]:
 @bp.get("/meta")
 def meta():
     return jsonify({
-        "payment_mode": "disabled" if config.PAYMENT_PROVIDER == "disabled" else "demo" if config.PAYMENT_PROVIDER == "simulado" else "live" if config.STRIPE_SECRET_KEY.startswith(("sk_live_", "rk_live_")) else "test",
+        "payment_mode": "disabled" if config.PAYMENT_PROVIDER == "disabled" else "demo" if config.PAYMENT_PROVIDER == "simulado"
+        else ("test" if config.MP_TEST else "live") if config.PAYMENT_PROVIDER == "mercadopago"
+        else "live" if config.STRIPE_SECRET_KEY.startswith(("sk_live_", "rk_live_")) else "test",
+        "payment_provider": config.PAYMENT_PROVIDER,
+        "payment_methods": (["en_linea"] if config.PAYMENT_PROVIDER != "disabled" else []) + ["efectivo"],
         "categories": config.CATEGORIES, "centros": config.CENTROS, "tipos": config.TIPOS,
         "carreras": catalog.CENTROS_CARRERAS, "email_domains": list(config.EMAIL_DOMAINS),
         "password_min": config.PASSWORD_MIN, "doc_types": config.VERIF_DOC_TYPES,
         "conditions": config.CONDITIONS, "meeting_points": config.SAFE_MEETING_POINTS,
-        "max_images": config.MAX_IMAGES, "max_image_bytes": config.MAX_IMAGE_BYTES,
-        "max_price_cents": config.MAX_PRICE_CENTS,
+        "max_images": config.MAX_IMAGES, "max_price_cents": config.MAX_PRICE_CENTS,
+        "microsoft_login": bool(config.MS_CLIENT_ID and config.MS_CLIENT_SECRET and config.MS_TENANT),
+        "legal": {"version": config.LEGAL_VERSION, "operator": config.OPERATOR_NAME,
+                  "email": config.PRIVACY_EMAIL, "address": config.OPERATOR_ADDRESS},
     })
 
 
@@ -251,11 +266,30 @@ def list_posts():
             return api_error("Precio máximo no válido.", 400)
         where.append("p.price_cents <= ?"); args.append(v)
 
-    order = {"nuevo": "p.id DESC", "barato": "p.price_cents ASC, p.id DESC",
-             "caro": "p.price_cents DESC, p.id DESC"}.get(request.args.get("sort", "nuevo"), "p.id DESC")
+    # Cerca de mí (US-10, US-16): la ubicación del usuario solo viaja en la consulta; no se guarda.
+    select, sel_args = BASE_SELECT, []
+    lat, lng = request.args.get("lat"), request.args.get("lng")
+    near = lat not in (None, "") and lng not in (None, "")
+    if near:
+        lat, lng = parse_coord(lat, 90), parse_coord(lng, 180)
+        try:
+            radius = float(request.args.get("radius_km", "10"))
+        except ValueError:
+            radius = -1
+        if lat is None or lng is None or not 0 < radius <= 200:
+            return api_error("Ubicación o distancia no válida.", 400)
+        select = BASE_SELECT.replace("SELECT p.*,", "SELECT p.*, distance_km(p.meet_lat, p.meet_lng, ?, ?) AS distance_km,", 1)
+        sel_args = [lat, lng]
+        where.append("p.meet_lat IS NOT NULL AND distance_km(p.meet_lat, p.meet_lng, ?, ?) <= ?")
+        args += [lat, lng, radius]
+
+    feat = f"(p.featured_until > {int(now())}) DESC, "   # las destacadas vigentes primero (valor numérico propio)
+    order = {"nuevo": feat + "p.id DESC", "barato": "p.price_cents ASC, p.id DESC",
+             "caro": "p.price_cents DESC, p.id DESC",
+             "cerca": "distance_km ASC, p.id DESC" if near else "p.id DESC"}.get(request.args.get("sort", "nuevo"), "p.id DESC")
     total = db.execute(f"SELECT COUNT(*) FROM posts p WHERE {' AND '.join(where)}", args).fetchone()[0]  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
-    posts = rows(db.execute(f"{BASE_SELECT} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?",
-                            [*args, size, offset]))
+    posts = rows(db.execute(f"{select} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?",  # nosec B608 - estructura constante
+                            [*sel_args, *args, size, offset]))
     imgs = images_for(db, [p["id"] for p in posts])
     is_mine = request.args.get("mine") == "1"
     out_posts = []
@@ -291,7 +325,7 @@ def get_post(pid):
 
     order = db.execute(
         """SELECT id, buyer_id, status FROM orders WHERE post_id=? AND status IN
-           ('PENDING_PAYMENT','HELD','DELIVERED','DISPUTED','RELEASING','REFUNDING','PAYMENT_REVIEW') LIMIT 1""", (pid,)
+           ('CASH_PENDING','PENDING_PAYMENT','HELD','DELIVERED','DISPUTED','RELEASING','REFUNDING','PAYMENT_REVIEW') LIMIT 1""", (pid,)
     ).fetchone()
     if order and g.user["id"] in (order["buyer_id"], row["author_id"]):
         out["live_order"] = {"id": order["id"], "status": order["status"]}
@@ -324,8 +358,35 @@ def _validate_fields(form, existing=None):
             return None, "Escribe un precio mayor a $0."
         if price > config.MAX_PRICE_CENTS:
             return None, f"El precio máximo es ${config.MAX_PRICE_CENTS // 100:,} MXN."
+    new_price = 0
+    if form.get("new_price") not in (None, ""):
+        new_price = parse_price(form.get("new_price"))
+        if new_price is None or new_price <= 0:
+            return None, "El precio nuevo de referencia no es válido."
+        if new_price < price:
+            return None, "El precio nuevo de referencia debe ser mayor o igual a tu precio."
+    meet_place = clean_text(form.get("meet_place"), 120, required=False) or ""
+    lat, lng = form.get("meet_lat"), form.get("meet_lng")
+    if lat in (None, "") and lng in (None, ""):
+        lat = lng = None
+    else:
+        lat, lng = parse_coord(lat, 90), parse_coord(lng, 180)
+        if lat is None or lng is None:
+            return None, "La ubicación no es válida. Vuelve a tomarla o quítala."
     return {"title": title, "description": desc, "category": category, "centro": centro,
-            "tipo": tipo, "condition": condition, "price_cents": price}, None
+            "tipo": tipo, "condition": condition, "price_cents": price,
+            "meet_place": meet_place, "meet_lat": lat, "meet_lng": lng, "new_price_cents": new_price}, None
+
+
+def parse_coord(raw, limit):
+    """Coordenada redondeada a 3 decimales (~100 m): suficiente para «cerca de mí» sin exponer un domicilio exacto."""
+    try:
+        v = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v) or abs(v) > limit:
+        return None
+    return round(v, 3)
 
 
 @bp.post("/posts")
@@ -342,9 +403,11 @@ def create_post():
         with tx(db):
             cur = db.execute(
                 """INSERT INTO posts(author_id,title,description,category,centro,tipo,price_cents,
-                                     condition,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                                     condition,status,created_at,meet_place,meet_lat,meet_lng,new_price_cents)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (g.user["id"], fields["title"], fields["description"], fields["category"],
-                 fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], "pending", now()),
+                 fields["centro"], fields["tipo"], fields["price_cents"], fields["condition"], "pending", now(),
+                 fields["meet_place"], fields["meet_lat"], fields["meet_lng"], fields["new_price_cents"]),
             )
             pid = cur.lastrowid
             for i, name in enumerate(saved):
@@ -376,16 +439,19 @@ def update_post(pid):
         saved = save_images(new_imgs)
         if isinstance(saved, tuple):
             return api_error(saved[1])
-    changed_content = bool(saved) or any(fields[k] != post[k] for k in ("title", "description", "category", "centro", "tipo"))
+    changed_content = bool(saved) or any(fields[k] != post[k] for k in ("title", "description", "category", "centro", "tipo",
+                                                                        "meet_place"))
     next_status = "pending" if changed_content else post["status"]
     old_images = []
     try:
         with tx(db):
             cur = db.execute(
                 """UPDATE posts SET title=?,description=?,category=?,centro=?,tipo=?,price_cents=?,
-                                    condition=?,status=? WHERE id=? AND status IN ('active','paused','pending')""",
+                                    condition=?,status=?,meet_place=?,meet_lat=?,meet_lng=?,new_price_cents=?
+                   WHERE id=? AND status IN ('active','paused','pending')""",
                 (fields["title"], fields["description"], fields["category"], fields["centro"],
-                 fields["tipo"], fields["price_cents"], fields["condition"], next_status, pid),
+                 fields["tipo"], fields["price_cents"], fields["condition"], next_status,
+                 fields["meet_place"], fields["meet_lat"], fields["meet_lng"], fields["new_price_cents"], pid),
             )
             if cur.rowcount != 1:
                 raise RuntimeError("estado cambió")
@@ -451,6 +517,60 @@ def pause_post(pid):
     return resp
 
 
+@bp.post("/posts/<int:pid>/feature")
+@login_required
+def feature_post(pid):
+    """Destacar una publicación propia (US-14): gratis, por FEATURE_HOURS, una a la vez por persona."""
+    db = get_db()
+    t = now()
+    with tx(db):
+        post = db.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+        if not post or post["author_id"] != g.user["id"]:
+            return api_error("Publicación no encontrada.", 404)
+        if post["status"] != "active":
+            return api_error("Solo puedes destacar publicaciones activas (ya aprobadas).", 409)
+        if post["featured_until"] > t:
+            return api_error("Esta publicación ya está destacada.", 409)
+        wait = post["featured_at"] + config.FEATURE_COOLDOWN_DAYS * 86400 - t
+        if post["featured_at"] and wait > 0:
+            return api_error(f"Podrás volver a destacarla en {max(1, wait // 86400)} día(s).", 429)
+        active = db.execute("SELECT COUNT(*) FROM posts WHERE author_id=? AND featured_until>? AND status='active'",
+                            (g.user["id"], t)).fetchone()[0]
+        if active >= config.FEATURE_MAX_ACTIVE:
+            return api_error("Ya tienes una publicación destacada. Espera a que termine para destacar otra.", 409)
+        until = t + config.FEATURE_HOURS * 3600
+        db.execute("UPDATE posts SET featured_until=?, featured_at=? WHERE id=?", (until, t, pid))
+    return jsonify({"ok": True, "featured_until": until})
+
+
+@bp.get("/posts/stats/mine")
+@login_required
+def my_stats():
+    """Estadísticas del anunciante (US-17): vistas, contactos e interesados por publicación y en total."""
+    db = get_db()
+    uid = g.user["id"]
+    per = rows(db.execute(
+        """SELECT p.id, p.title, p.status, p.tipo, p.price_cents, p.views_count AS views, p.created_at,
+                  (SELECT COUNT(DISTINCT m.sender_id) FROM messages m WHERE m.post_id=p.id AND m.sender_id!=p.author_id) AS contacts,
+                  (SELECT COUNT(*) FROM favorites f WHERE f.post_id=p.id) AS favorites
+           FROM posts p WHERE p.author_id=? AND p.status!='removed' ORDER BY p.views_count DESC, p.id DESC LIMIT 100""",
+        (uid,)))
+    for r in per:
+        r["contact_rate"] = round(r["contacts"] / r["views"], 3) if r["views"] else 0
+    earned = db.execute("SELECT COALESCE(SUM(amount_cents),0) FROM orders WHERE seller_id=? AND status='RELEASED'",
+                        (uid,)).fetchone()[0]
+    totals = {
+        "posts": len(per),
+        "active": sum(1 for r in per if r["status"] in ("active", "reserved")),
+        "reused": sum(1 for r in per if r["status"] == "sold"),
+        "views": sum(r["views"] for r in per),
+        "contacts": sum(r["contacts"] for r in per),
+        "favorites": sum(r["favorites"] for r in per),
+        "earned_cents": earned,
+    }
+    return jsonify({"ok": True, "totals": totals, "posts": per})
+
+
 @bp.post("/posts/<int:pid>/close")
 @login_required
 def close_post(pid):
@@ -465,6 +585,6 @@ def close_post(pid):
         elif post["status"] != "active":
             resp = api_error("La publicación ya no está activa.", 409)
         else:
-            db.execute("UPDATE posts SET status='sold' WHERE id=?", (pid,))
+            db.execute("UPDATE posts SET status='sold', closed_at=? WHERE id=?", (now(), pid))
             resp = jsonify({"ok": True})
     return resp

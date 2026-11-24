@@ -13,6 +13,8 @@ for key, value in {
     'ECOGALLO_SMTP_HOST': '', 'STRIPE_SECRET_KEY': '',
     'STRIPE_PUBLISHABLE_KEY': '', 'STRIPE_WEBHOOK_SECRET': '',
     'ECOGALLO_PUBLIC_URL': '', 'ECOGALLO_ADMINS': '',
+    'ECOGALLO_NO_DOTENV': '1', 'MERCADOPAGO_ACCESS_TOKEN': '', 'MERCADOPAGO_WEBHOOK_SECRET': '',
+    'TWILIO_ACCOUNT_SID': '', 'TWILIO_AUTH_TOKEN': '', 'TWILIO_FROM': '',
 }.items():
     os.environ[key] = value
 

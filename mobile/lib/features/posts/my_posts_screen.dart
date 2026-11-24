@@ -215,6 +215,9 @@ class _MyPostsScreenState extends State<MyPostsScreen> {
                         ),
                       ],
                     ),
+                    Text(
+                      'Vistas: ${post.stats['views'] ?? 0} · Contactos: ${post.stats['contacts'] ?? 0} · Interesados: ${post.stats['interested'] ?? 0}',
+                    ),
                     Wrap(
                       spacing: 4,
                       children: [
@@ -262,6 +265,34 @@ class _MyPostsScreenState extends State<MyPostsScreen> {
                                 ? null
                                 : () => _edit(post),
                             child: const Text('Editar'),
+                          ),
+                        if (post.status == 'active')
+                          TextButton(
+                            onPressed: changing || loading
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      changing = true;
+                                      error = null;
+                                    });
+                                    try {
+                                      await widget.session.api.post(
+                                        '/api/posts/${post.id}/feature',
+                                      );
+                                      if (mounted) await _load();
+                                    } on ApiException catch (e) {
+                                      if (mounted) {
+                                        setState(() => error = e.message);
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => changing = false);
+                                      }
+                                    }
+                                  },
+                            child: Text(
+                              post.featured ? 'Destacada' : 'Destacar gratis',
+                            ),
                           ),
                         if (post.status == 'active' || post.status == 'paused')
                           TextButton(

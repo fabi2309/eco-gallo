@@ -2,12 +2,13 @@
 from flask import Blueprint, g, jsonify, request, send_from_directory
 
 import config
-from auth import _drop_avatar_file, drop_document_file
+from accounts import anonymize_account, drop_account_files, has_open_orders
+from auth import drop_document_file
 from db import get_db, now, rows, tx
 from orders import SELECT_ORDER, serialize as serialize_order
 from security import admin_required, api_error, clean_text, notify
 from social import impact_numbers
-from payment_states import OPEN_SQL, FUNDED_SQL
+from payment_states import FUNDED_SQL
 from pagination import pagination
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
@@ -147,18 +148,13 @@ def suspend(uid):
 def delete_user(uid):
     """Elimina una cuenta con borrado seguro de sus datos personales.
 
-    No se hace DELETE de la fila porque órdenes, mensajes y reportes de *otras* personas la
-    referencian. En su lugar la cuenta se **anonimiza**: se borran el correo, nombre, carrera,
-    bio, foto, contraseña, sesiones, notificaciones, lista de deseos, documentos de egresado,
-    códigos de acceso y fotos de sus publicaciones; sus mensajes enviados pierden el texto.
-    Se conserva solo lo necesario para la integridad del historial (ids, montos, estados).
-    La acción exige confirmar el correo para evitar borrar la cuenta equivocada.
+    La cuenta se **anonimiza** con el mismo procedimiento que la baja voluntaria
+    (ver accounts.anonymize_account). La acción exige confirmar el correo para evitar borrar la cuenta equivocada.
     """
     data = request.get_json(silent=True) or {}
     confirm = str(data.get("confirm_email", "")).strip().lower()
     db = get_db()
-    files, doc_files, avatar_name = [], [], ""
-    resp = None
+    removed, resp = None, None
     with tx(db):
         u = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         if not u or u["deleted_at"]:
@@ -169,40 +165,46 @@ def delete_user(uid):
             resp = api_error("No se puede eliminar a otro administrador.", 400)
         elif confirm != u["email"]:
             resp = api_error("Escribe el correo exacto de la cuenta para confirmar.", 400)
-        elif db.execute(
-                f"SELECT 1 FROM orders WHERE (buyer_id=? OR seller_id=?) AND status IN {OPEN_SQL}",  # nosec B608 - SQL structure from fixed constants; user values are bound parameters
-                (uid, uid)).fetchone():
-            resp = api_error("Tiene pagos retenidos o en disputa. Resuélvelos antes de eliminar la cuenta.", 409)
+        elif has_open_orders(db, uid):
+            resp = api_error("Tiene pagos retenidos, en disputa o por liquidar. Resuélvelos antes de eliminar la cuenta.", 409)
         else:
-            avatar_name = u["avatar"]
-            doc_files = [r["filename"] for r in db.execute(
-                "SELECT filename FROM alumni_verifications WHERE user_id=?", (uid,)) if r["filename"]]
-            files = [r["filename"] for r in db.execute(
-                "SELECT i.filename FROM post_images i JOIN posts p ON p.id=i.post_id WHERE p.author_id=?", (uid,))]
-            db.execute("DELETE FROM post_images WHERE post_id IN (SELECT id FROM posts WHERE author_id=?)", (uid,))
-            db.execute("UPDATE posts SET status='removed', description='' WHERE author_id=?", (uid,))
-            db.execute("UPDATE messages SET content='[mensaje eliminado]' WHERE sender_id=?", (uid,))
-            for table in ("sessions", "notifications", "wishlist", "alumni_verifications",
-                          "favorites", "auth_challenges", "totp_recovery_codes"):
-                db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))  # nosec B608 - tabla tomada de tupla fija, no de entrada del usuario
-            db.execute("DELETE FROM login_codes WHERE email=?", (u["email"],))
-            db.execute("UPDATE reports SET status='resolved' WHERE target_type='user' AND target_id=?", (uid,))
-            db.execute(
-                """UPDATE users SET email=?, name='Cuenta eliminada', carrera='', centro='General', bio='', avatar='',
-                   password_hash='', totp_enabled=0, totp_secret='', totp_pending_secret='',
-                   totp_pending_expires_at=0, suspended=1, kind='estudiante', verif_status='approved', email_verified=0,
-                   failed_logins=0, locked_until=0, stripe_account_id='', deleted_at=? WHERE id=?""",
-                (f"eliminado-{uid}@eliminado.invalid", now(), uid))
+            removed = anonymize_account(db, uid, u["email"])
             resp = jsonify({"ok": True})
-    _drop_avatar_file(avatar_name)
-    for name in files:
-        try:
-            (config.UPLOADS / name).unlink(missing_ok=True)
-        except OSError:
-            pass
-    for name in doc_files:
-        drop_document_file(name)
+    if removed:
+        drop_account_files(removed)
     return resp
+
+
+# ------------------------------------------------------------- Liquidaciones (Mercado Pago)
+@bp.get("/payouts")
+@admin_required
+def payouts():
+    """Ventas confirmadas cobradas con Mercado Pago que falta pagar al vendedor."""
+    rs = rows(get_db().execute(
+        """SELECT o.id, o.amount_cents, o.updated_at, o.provider_payment_id, p.title AS post_title,
+                  u.id AS seller_id, u.name AS seller_name, u.email AS seller_email
+           FROM orders o JOIN posts p ON p.id=o.post_id JOIN users u ON u.id=o.seller_id
+           WHERE o.payout_status='pending' ORDER BY o.updated_at"""))
+    return jsonify({"ok": True, "payouts": rs, "total_cents": sum(r["amount_cents"] for r in rs)})
+
+
+@bp.post("/payouts/<int:oid>")
+@admin_required
+def mark_payout(oid):
+    ref = clean_text((request.get_json(silent=True) or {}).get("reference"), 120)
+    if not ref or len(ref) < 4:
+        return api_error("Escribe la referencia de la transferencia o del pago al vendedor.", 400)
+    db = get_db()
+    with tx(db):
+        o = db.execute("SELECT o.*, p.title FROM orders o JOIN posts p ON p.id=o.post_id "
+                       "WHERE o.id=? AND o.payout_status='pending'", (oid,)).fetchone()
+        if not o:
+            return api_error("No hay una liquidación pendiente para esa orden.", 404)
+        db.execute("UPDATE orders SET payout_status='paid', payout_ref=?, payout_at=? WHERE id=?", (ref, now(), oid))
+        db.execute("INSERT INTO order_events(order_id,actor_id,event,note,created_at) VALUES(?,?,?,?,?)",
+                   (oid, g.user["id"], "payout_paid", f"Administración pagó al vendedor. Referencia: {ref}", now()))
+        notify(db, o["seller_id"], f"Te pagamos la venta de «{o['title']}». Referencia: {ref}", f"#/order/{oid}")
+    return jsonify({"ok": True})
 
 
 # ------------------------------------------------------------- Respaldos

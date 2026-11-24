@@ -9,8 +9,10 @@ import * as chat from "./views/chat.js";
 import * as me from "./views/profile.js";
 import * as admin from "./views/admin.js";
 import * as wish from "./views/wishlist.js";
+import * as legal from "./views/legal.js";
+import * as cart from "./views/cart.js";
 
-export const state = { user: null, meta: null, unreadMsgs: 0, unreadNotes: 0, verification: null };
+export const state = { user: null, meta: null, unreadMsgs: 0, unreadNotes: 0, verification: null, cartCount: 0 };
 const app = document.getElementById("app");
 
 const routes = [
@@ -19,7 +21,10 @@ const routes = [
   [/^#\/messages$/, chat], [/^#\/chat\/(\d+)\/(\d+)$/, chat], [/^#\/profile$/, me, "profile"],
   [/^#\/payment-(?:success|cancel)\/(\d+)$/, orders],
   [/^#\/impact$/, me, "impact"], [/^#\/admin$/, admin], [/^#\/wishlist$/, wish],
+  [/^#\/cart$/, cart], [/^#\/privacidad$/, legal, "privacidad"], [/^#\/terminos$/, legal, "terminos"],
 ];
+// Páginas que se pueden leer sin iniciar sesión (aviso de privacidad y términos).
+const PUBLIC = { "#/privacidad": "privacidad", "#/terminos": "terminos" };
 
 const NAV = [
   ["#/", "Inicio", "home"], ["#/mine", "Mis publicaciones", "list"], ["#/orders", "Compras y ventas", "bag"],
@@ -32,6 +37,7 @@ export async function refreshUser() {
   state.passwordResetAllowed = !!r.password_reset_allowed;
   state.unreadMsgs = r.unread_messages || 0;
   state.unreadNotes = r.unread_notifications || 0;
+  state.cartCount = r.cart_count || 0;
   state.verification = r.verification || null;
   return r;
 }
@@ -41,7 +47,7 @@ function shell(path) {
   const badge = (n) => (n ? `<span class="badge">${n}</span>` : "");
   const nb = { "#/messages": badge(state.unreadMsgs) };
   app.innerHTML = `
-  ${state.meta.payment_mode !== "live" ? `<div class="payment-banner" role="status">${state.meta.payment_mode === "disabled" ? "Pagos en línea deshabilitados. Puedes publicar y contactar a otros usuarios." : state.meta.payment_mode === "demo" ? "Demostración: compras, saldos y reembolsos simulados. No se mueve dinero real." : "Stripe Test: usa únicamente datos de prueba. No se mueve dinero real."}</div>` : ""}
+  ${state.meta.payment_mode === "test" ? `<div class="payment-banner" role="status">${state.meta.payment_provider === "mercadopago" ? "Mercado Pago" : "Stripe"} en modo de pruebas: usa únicamente tarjetas de prueba. No se mueve dinero real.</div>` : ""}
   <header class="topbar"><div class="in">
     <a class="brand" href="#/"><img src="/img/logo.svg" alt=""><span>ECO-GALLO <small>UAA</small></span></a>
     <nav class="topnav" aria-label="Principal">
@@ -49,6 +55,7 @@ function shell(path) {
       ${state.user.role === "admin" ? `<a href="#/admin"${cur("#/admin")}>Administración</a>` : ""}
     </nav>
     <span class="spacer"></span>
+    <a class="bell" id="cartlink" href="#/cart" aria-label="Carrito" title="Carrito">${icon("bag")}${badge(state.cartCount)}</a>
     <a class="bell" id="wishlink" href="#/wishlist" aria-label="Lista de deseos" title="Lista de deseos">${icon("heart")}</a>
     <button class="bell" id="theme" aria-label="Cambiar entre modo claro y oscuro" title="Modo claro / oscuro">${icon(document.documentElement.dataset.theme === "dark" ? "sun" : "moon")}</button>
     <button class="bell" id="bell" aria-label="Notificaciones">${icon("bell")}${badge(state.unreadNotes)}</button>
@@ -68,16 +75,42 @@ function shell(path) {
 function paintBadges() {
   const put = (host, n, cls = "badge") => { host?.querySelector("." + cls)?.remove(); if (n) host?.insertAdjacentHTML("beforeend", `<span class="${cls}">${n}</span>`); };
   put(document.getElementById("bell"), state.unreadNotes);
+  put(document.getElementById("cartlink"), state.cartCount);
   document.querySelectorAll('a[href="#/messages"]').forEach((a) => put(a, state.unreadMsgs));
 }
-setInterval(async () => {
-  if (!state.user || document.hidden || !document.getElementById("bell")) return;
-  const before = state.unreadNotes;
-  try { await refreshUser(); } catch { return; }
-  if (!state.user) return;
+// Avisos casi en tiempo real: consulta ligera cada 5 s (contadores) y aviso del navegador si la pestaña está oculta.
+let lastSeen = { msg: null, note: null };
+async function pulse() {
+  if (!state.user || !document.getElementById("bell")) return;
+  let r;
+  try { r = await api.get("/api/pulse"); } catch { return; }
+  const first = lastSeen.msg === null;
+  const newNote = !first && r.last_notification_id > lastSeen.note && r.unread_notifications > 0;
+  const newMsg = !first && r.last_message_id > lastSeen.msg && r.unread_messages > 0;
+  lastSeen = { msg: r.last_message_id, note: r.last_notification_id };
+  state.unreadNotes = r.unread_notifications; state.unreadMsgs = r.unread_messages; state.cartCount = r.cart_count;
   paintBadges();
-  if (state.unreadNotes > before) toast("Tienes un aviso nuevo 🔔");
-}, 30000);
+  const inThatChat = r.latest_message && location.hash === `#/chat/${r.latest_message.post_id}/${r.latest_message.sender_id}`;
+  if (newMsg && !inThatChat) {
+    const m = r.latest_message;
+    if (!systemNotify(`Mensaje de ${m.name}`, m.preview, `#/chat/${m.post_id}/${m.sender_id}`)) toast(`💬 ${m.name}: ${m.preview}`);
+  }
+  if (newNote) {
+    const n = r.latest_notification;
+    if (!systemNotify("ECO-GALLO", n.text, n.link || "#/")) toast("Tienes un aviso nuevo 🔔");
+  }
+}
+// Notificación del sistema operativo solo si el usuario la permitió y no está mirando la página.
+function systemNotify(title, body, link) {
+  if (!("Notification" in window) || Notification.permission !== "granted" || !document.hidden) return false;
+  try {
+    const n = new Notification(title, { body, icon: "/img/logo.svg", tag: link });
+    n.onclick = () => { window.focus(); location.hash = link; n.close(); };
+    return true;
+  } catch { return false; }
+}
+setInterval(pulse, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pulse(); });
 
 async function toggleNotes(e) {
   const old = document.querySelector(".notes");
@@ -103,15 +136,24 @@ async function route() {
   try {
     const r = await refreshUser();
     if (!state.meta) state.meta = await api.get("/api/meta");
-    if (!state.user) return login.render(app, { onDone: goHome });
+    // El aviso y los términos se pueden leer siempre: sin sesión o a mitad del registro.
+    if (PUBLIC[hash] && (!state.user || r.needs_profile || r.needs_terms || r.needs_verification)) {
+      return legal.render(app, { extra: PUBLIC[hash], state });
+    }
+    if (!state.user) {
+      const err = hash.match(/^#\/oauth-error\/([\w-]+)$/), totp = hash.match(/^#\/oauth-totp\/([\w-]+)$/);
+      if (err || totp) history.replaceState(null, "", "#/");   // el token no se queda en el historial
+      return login.render(app, { onDone: goHome, oauth: err ? { error: err[1] } : totp ? { totp: totp[1] } : null });
+    }
     if (r.needs_profile) return login.renderProfile(app, { onDone: () => route() });
+    if (r.needs_terms && !PUBLIC[hash]) return legal.renderAccept(app, { state, api, onDone: () => route(), onLogout: logout });
     if (r.needs_verification) return login.renderPending(app, { state, onLogout: logout, refresh: () => route() });
   } catch (e) {
     app.innerHTML = `<main><div class="empty"><h2>No pudimos conectar</h2><p>${esc(e.message)}</p><button class="btn" id="retry-connection">Reintentar</button></div></main>`;
     app.querySelector("#retry-connection")?.addEventListener("click", () => route());
     return;
   }
-  if (hash === "#/login") { location.hash = "#/"; return; }
+  if (hash === "#/login" || hash.startsWith("#/oauth-")) { location.hash = "#/"; return; }
   shell(hash);
   const view = document.getElementById("view");
   const hit = routes.find(([re]) => re.test(hash));
@@ -119,7 +161,7 @@ async function route() {
   const [re, mod, extra] = hit;
   const args = hash.match(re).slice(1);
   try {
-    await mod.render(view, { args, extra, state, go: (h) => (location.hash = h), refresh: () => route(), isCurrent: () => my === seq });
+    await mod.render(view, { args, extra, state, inShell: true, go: (h) => (location.hash = h), refresh: () => route(), isCurrent: () => my === seq });
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) return route();
     view.innerHTML = `<div class="empty"><h2>No se pudo cargar</h2><p>${esc(e.message)}</p><a class="btn ghost" href="#/">Volver al inicio</a></div>`;
@@ -137,3 +179,21 @@ export async function logout() {
 
 window.addEventListener("hashchange", route);
 route();
+
+// Enlaces de aviso/términos dentro de formularios: se abren encima sin perder lo escrito.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-legal]");
+  if (!a || !state.meta) return;
+  e.preventDefault();
+  legal.openLegal(a.dataset.legal, state.meta);
+});
+
+// App instalable (PWA): el service worker guarda solo la interfaz, nunca datos de la API.
+export let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; document.dispatchEvent(new Event("eg:installable")); });
+window.addEventListener("appinstalled", () => { installPrompt = null; toast("ECO-GALLO quedó instalada en tu dispositivo"); });
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => { /* sin PWA: la web sigue funcionando */ }));
+}
+window.addEventListener("offline", () => toast("Sin conexión. Algunas acciones no estarán disponibles.", true));
+window.addEventListener("online", () => toast("Conexión restablecida"));

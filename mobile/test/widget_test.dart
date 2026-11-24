@@ -191,7 +191,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(query, 'Libro');
-    await tester.ensureVisible(find.byKey(const Key('post-1')));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('post-1')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('post-1')));
     await tester.pumpAndSettle();

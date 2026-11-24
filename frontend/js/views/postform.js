@@ -10,9 +10,11 @@ export async function render(root, { args, state, go }) {
   // Estado del asistente: vive en memoria mientras dura la pantalla.
   const st = editing
     ? { title: editing.title, description: editing.description, category: editing.category, condition: editing.condition,
-        centro: editing.centro, tipo: editing.tipo, price: editing.price_cents ? String(editing.price_cents / 100) : "", files: [] }
+        centro: editing.centro, tipo: editing.tipo, price: editing.price_cents ? String(editing.price_cents / 100) : "", files: [],
+        place: editing.meeting?.place || "", lat: editing.meeting?.lat ?? null, lng: editing.meeting?.lng ?? null,
+        newPrice: editing.new_price_cents ? String(editing.new_price_cents / 100) : "" }
     : { title: "", description: "", category: meta.categories[0], condition: meta.conditions.includes("Usado") ? "Usado" : meta.conditions[0],
-        centro: "General", tipo: "venta", price: "", files: [] };
+        centro: "General", tipo: "venta", price: "", files: [], place: meta.meeting_points[0] || "", lat: null, lng: null, newPrice: "" };
   let step = 0;
   const urls = new Map();   // File -> URL de vista previa
   const urlOf = (f) => { if (!urls.has(f)) urls.set(f, URL.createObjectURL(f)); return urls.get(f); };
@@ -95,7 +97,19 @@ export async function render(root, { args, state, go }) {
       </div>
       <label class="field" id="priceBox">Precio (MXN)<input class="input" name="price" inputmode="decimal" placeholder="250" value="${esc(st.price)}" autocomplete="off">
         <span class="hint">Las ventas usan pago protegido: el dinero se retiene hasta que el comprador confirma la recepción. Máximo ${money(meta.max_price_cents)}.</span></label>
+      <label class="field">¿Cuánto cuesta nuevo? <span class="hint">(opcional, MXN)</span>
+        <input class="input" name="new_price" inputmode="decimal" placeholder="Ej. 650" value="${esc(st.newPrice)}" autocomplete="off">
+        <span class="hint">Con este dato calculamos cuánto ahorra la comunidad en el dashboard de impacto.</span></label>
       <div class="notice" id="freeNote">${icon("leaf")} Las donaciones y los trueques no llevan precio: se acuerdan por mensaje.</div>
+      <fieldset class="field meetbox"><legend>Punto de entrega</legend>
+        <select class="input" id="placeSel" aria-label="Punto de entrega">
+          ${meta.meeting_points.map((m) => `<option value="${esc(m)}" ${st.place === m ? "selected" : ""}>${esc(m)} (punto seguro)</option>`).join("")}
+          <option value="__otro" ${st.place && !meta.meeting_points.includes(st.place) ? "selected" : ""}>Otro lugar (escríbelo)</option>
+          <option value="" ${!st.place ? "selected" : ""}>Lo acordamos por mensaje</option></select>
+        <input class="input" id="placeTxt" name="meet_place_txt" maxlength="120" placeholder="Ej. Edificio 1, entrada principal" value="${esc(meta.meeting_points.includes(st.place) ? "" : st.place)}" aria-label="Escribe el punto de entrega">
+        <div class="row wrap geo"><button type="button" class="btn ghost sm" id="geoBtn">${icon("pin")} Usar mi ubicación actual</button><span class="small muted" id="geoTxt"></span></div>
+        <span class="hint">La ubicación es opcional y aproximada (unos 100 m). Sirve para que te encuentren con «Cerca de mí». Prefiere puntos dentro del campus.</span>
+      </fieldset>
       ${nav(false)}`;
     const tipo = form.querySelector("#tipo");
     const sync = () => {
@@ -104,10 +118,31 @@ export async function render(root, { args, state, go }) {
       form.querySelector("#freeNote").classList.toggle("hidden", venta);
     };
     tipo.onchange = sync; sync();
+    const placeSel = form.querySelector("#placeSel"), placeTxt = form.querySelector("#placeTxt");
+    const syncPlace = () => placeTxt.classList.toggle("hidden", placeSel.value !== "__otro");
+    placeSel.onchange = syncPlace; syncPlace();
+    const geoTxt = form.querySelector("#geoTxt"), geoBtn = form.querySelector("#geoBtn");
+    const paintGeo = () => {
+      geoTxt.innerHTML = st.lat != null ? `Ubicación guardada (${st.lat.toFixed(3)}, ${st.lng.toFixed(3)}) · <button type="button" class="linkbtn" id="geoDel">Quitar</button>` : "Sin ubicación";
+      form.querySelector("#geoDel")?.addEventListener("click", () => { st.lat = st.lng = null; paintGeo(); });
+    };
+    paintGeo();
+    geoBtn.onclick = () => {
+      if (!navigator.geolocation) return err("Tu navegador no permite obtener la ubicación.");
+      geoBtn.disabled = true; geoTxt.textContent = "Obteniendo ubicación…";
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { st.lat = Math.round(pos.coords.latitude * 1000) / 1000; st.lng = Math.round(pos.coords.longitude * 1000) / 1000; geoBtn.disabled = false; paintGeo(); },
+        (e2) => { geoBtn.disabled = false; paintGeo(); err(e2.code === 1 ? "No diste permiso para usar tu ubicación. Puedes publicar sin ella." : "No pudimos obtener tu ubicación. Intenta de nuevo."); },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+    };
     form.querySelector("#next").onclick = (e) => {
       e.preventDefault();
+      st.place = placeSel.value === "__otro" ? placeTxt.value.trim() : placeSel.value;
+      if (placeSel.value === "__otro" && st.place.length < 3) return err("Escribe el punto de entrega o elige uno de la lista.");
       const fd = Object.fromEntries(new FormData(form));
-      Object.assign(st, { category: fd.category, condition: fd.condition, centro: fd.centro, tipo: fd.tipo, price: (fd.price || "").trim() });
+      Object.assign(st, { category: fd.category, condition: fd.condition, centro: fd.centro, tipo: fd.tipo, price: (fd.price || "").trim(),
+        newPrice: (fd.new_price || "").trim().replace(",", ".") });
+      if (st.newPrice && (!/^\d+(\.\d{1,2})?$/.test(st.newPrice) || +st.newPrice <= 0)) return err("Escribe un precio nuevo válido o déjalo vacío.");
       if (st.tipo === "venta") {
         const v = st.price.replace(",", ".");
         if (!/^\d+(\.\d{1,2})?$/.test(v) || +v <= 0) return err("Escribe un precio válido, por ejemplo 250 o 99.50.");
@@ -139,6 +174,7 @@ export async function render(root, { args, state, go }) {
             <div class="big">${st.tipo === "venta" ? money(cents) : st.tipo === "donacion" ? "Gratis" : "Se intercambia"}</div>
             <p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(st.description)}</p>
             <div class="muted small">${esc(st.centro)} · publicado ahora</div>
+            ${st.place || st.lat != null ? `<div class="small">${icon("pin")} Entrega: ${esc(st.place || "por acordar")}${st.lat != null ? " · con ubicación aproximada" : ""}</div>` : ""}
             <div class="seller">${avatar(u)}<div class="grow"><b>${esc(u.name)}</b>${badges(u) ? `<div class="insignias-row">${badges(u)}</div>` : ""}<div class="muted small">${esc(u.carrera || u.centro || "")}</div></div></div>
           </div>
         </div>
@@ -155,6 +191,9 @@ export async function render(root, { args, state, go }) {
     const fd = new FormData();
     ["title", "description", "category", "condition", "centro", "tipo"].forEach((k) => fd.append(k, st[k]));
     fd.append("price", st.tipo === "venta" ? st.price.replace(",", ".") : "");
+    fd.append("meet_place", st.place || "");
+    fd.append("new_price", st.newPrice || "");
+    if (st.lat != null) { fd.append("meet_lat", st.lat); fd.append("meet_lng", st.lng); }
     st.files.forEach((f) => fd.append("images", f, f.name));
     try {
       if (editing) { await api.form("PUT", `/api/posts/${editing.id}`, fd); toast("Cambios guardados. Si cambiaste texto o fotos, se enviaron nuevamente a revisión."); cleanup(); go(`#/post/${editing.id}`); }

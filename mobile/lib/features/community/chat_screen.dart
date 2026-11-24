@@ -66,7 +66,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    timer = Timer.periodic(const Duration(seconds: 8), (_) {
+    timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted &&
           foreground &&
           ModalRoute.of(context)?.isCurrent == true &&
@@ -95,12 +95,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         latest ||
         !scroll.hasClients ||
         scroll.position.maxScrollExtent - scroll.offset < 100;
-    setState(() => loading = true);
+    setState(() => loading = data == null);
     try {
       userId ??= (await requireCurrentUser(widget.api))['id'] as int;
-      final result = await widget.api.get(
-        '/api/threads/${widget.postId}/${widget.otherId}',
+      final previous = data?['messages'] as List? ?? [];
+      final after = previous.fold<int>(
+        0,
+        (last, item) => math.max(last, item['id'] as int),
       );
+      final delta = await widget.api.get(
+        '/api/threads/${widget.postId}/${widget.otherId}${data == null ? '' : '/since'}',
+        data == null ? null : {'after': '$after'},
+      );
+      final fresh = delta['messages'] as List? ?? [];
+      final result = data == null
+          ? delta
+          : <String, dynamic>{
+              ...data!,
+              'messages': {
+                for (final m in [...previous, ...fresh]) m['id']: m,
+              }.values.toList(),
+              'seen_up_to': delta['seen_up_to'] ?? data!['seen_up_to'] ?? 0,
+            };
+      if (fresh.any((m) => (m['id'] as int) > after)) {
+        widget.api.onInboxChanged?.call();
+      }
       if (!mounted) return;
       setState(() {
         data = result;
@@ -250,6 +269,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                           dateTimeLabel(message['created_at']),
                                           style: const TextStyle(fontSize: 10),
                                         ),
+                                        if (mine &&
+                                            (message['id'] as int) <=
+                                                (data?['seen_up_to'] as int? ??
+                                                    0))
+                                          const Text(
+                                            'Visto',
+                                            style: TextStyle(fontSize: 10),
+                                          ),
                                       ],
                                     ),
                                   ),

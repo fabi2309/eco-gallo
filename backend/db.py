@@ -1,5 +1,6 @@
 """SQLite sin ORM: una conexión por petición, transacciones explícitas."""
 import contextlib
+import math
 import sqlite3
 import time
 
@@ -43,6 +44,18 @@ CREATE TABLE IF NOT EXISTS login_codes(
 );
 CREATE INDEX IF NOT EXISTS ix_codes_email ON login_codes(email, created_at);
 
+CREATE TABLE IF NOT EXISTS phone_codes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  phone TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_phone_codes_user ON phone_codes(user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -62,6 +75,15 @@ CREATE TABLE IF NOT EXISTS auth_challenges(
 );
 CREATE INDEX IF NOT EXISTS ix_auth_challenges_user
   ON auth_challenges(user_id, expires_at);
+
+-- Inicio de sesión con Microsoft: state de un solo uso, nonce y verificador PKCE (10 min).
+CREATE TABLE IF NOT EXISTS oauth_states(
+  state_hash TEXT PRIMARY KEY,
+  nonce TEXT NOT NULL,
+  verifier TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS totp_recovery_codes(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,6 +186,7 @@ CREATE TABLE IF NOT EXISTS messages(
   read_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_msg_pair ON messages(post_id, sender_id, receiver_id);
+CREATE INDEX IF NOT EXISTS ix_msg_unread ON messages(receiver_id, read_at);
 
 CREATE TABLE IF NOT EXISTS notifications(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +196,7 @@ CREATE TABLE IF NOT EXISTS notifications(
   created_at INTEGER NOT NULL,
   read_at INTEGER
 );
+CREATE INDEX IF NOT EXISTS ix_notes_user ON notifications(user_id, read_at);
 
 -- Documentos (kárdex / título) que suben los egresados para que un admin los revise.
 -- El archivo vive fuera de /uploads y se borra al resolver la solicitud.
@@ -211,6 +235,14 @@ CREATE TABLE IF NOT EXISTS favorites(
 CREATE INDEX IF NOT EXISTS ix_fav_user ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS ix_fav_post ON favorites(post_id);
 
+-- Carrito (US-04): artículos en venta que el usuario piensa pagar juntos.
+CREATE TABLE IF NOT EXISTS cart_items(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, post_id)
+);
+
 CREATE TABLE IF NOT EXISTS reports(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_id INTEGER NOT NULL REFERENCES users(id),
@@ -223,9 +255,20 @@ CREATE TABLE IF NOT EXISTS reports(
 """
 
 
+def distance_km(lat1, lng1, lat2, lng2):
+    """Distancia en km sobre la esfera terrestre (haversine). None si falta alguna coordenada."""
+    if None in (lat1, lng1, lat2, lng2):
+        return None
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 6371.0 * 2 * math.asin(min(1.0, math.sqrt(a)))
+
+
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH, timeout=15, isolation_level=None)
     con.row_factory = sqlite3.Row
+    con.create_function("distance_km", 4, distance_km, deterministic=True)
     con.execute("PRAGMA foreign_keys=ON")
     return con
 
@@ -259,6 +302,15 @@ _USER_MIGRATIONS = {
     "totp_pending_expires_at": "INTEGER NOT NULL DEFAULT 0",
     "totp_last_counter": "INTEGER NOT NULL DEFAULT -1",
     "stripe_account_id": "TEXT NOT NULL DEFAULT ''",
+    "terms_version": "TEXT NOT NULL DEFAULT ''",
+    "terms_accepted_at": "INTEGER NOT NULL DEFAULT 0",
+    # Pagos con tarjeta: teléfono confirmado por SMS y cuenta para recibir (solo últimos 4 dígitos).
+    "phone": "TEXT NOT NULL DEFAULT ''",
+    "phone_verified_at": "INTEGER NOT NULL DEFAULT 0",
+    "payout_kind": "TEXT NOT NULL DEFAULT ''",          # '' | tarjeta | clabe
+    "payout_last4": "TEXT NOT NULL DEFAULT ''",
+    "payout_holder": "TEXT NOT NULL DEFAULT ''",
+    "payout_updated_at": "INTEGER NOT NULL DEFAULT 0",
 }
 
 _ORDER_MIGRATIONS = {
@@ -272,6 +324,13 @@ _ORDER_MIGRATIONS = {
     "payment_operation_at": "INTEGER NOT NULL DEFAULT 0",
     "operation_actor_id": "INTEGER",
     "operation_note": "TEXT NOT NULL DEFAULT ''",
+    "checkout_group": "TEXT NOT NULL DEFAULT ''",        # órdenes pagadas juntas (carrito / Mercado Pago)
+    "provider_payment_id": "TEXT NOT NULL DEFAULT ''",   # id del pago en Mercado Pago
+    "payout_status": "TEXT NOT NULL DEFAULT ''",         # '' | pending | paid (liquidación manual al vendedor)
+    "payout_ref": "TEXT NOT NULL DEFAULT ''",
+    "payout_at": "INTEGER NOT NULL DEFAULT 0",
+    "card_brand": "TEXT NOT NULL DEFAULT ''",          # tarjeta del comprador (solo marca y últimos 4)
+    "card_last4": "TEXT NOT NULL DEFAULT ''",
 }
 
 # Nombres anteriores de centros -> nombres del catálogo oficial (bases ya existentes).
@@ -296,6 +355,7 @@ def init_db():
     con.execute("""
         CREATE UNIQUE INDEX ux_orders_live_post ON orders(post_id)
         WHERE status IN (
+            'CASH_PENDING',
             'PENDING_PAYMENT',
             'HELD',
             'DELIVERED',
@@ -332,7 +392,9 @@ def init_db():
                 f"ALTER TABLE orders ADD COLUMN {col} {ddl}"
             )
 
-    con.execute("UPDATE orders SET payment_provider='stripe' WHERE stripe_session_id!='' OR payment_ref LIKE 'cs_%' OR status='PENDING_PAYMENT'")
+    con.execute("UPDATE orders SET payment_provider='stripe' WHERE payment_provider NOT IN ('mercadopago','efectivo') AND "
+                "(stripe_session_id!='' OR payment_ref LIKE 'cs_%' OR status='PENDING_PAYMENT')")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_orders_group ON orders(checkout_group)")
 
     # Migración de publicaciones.
     have_posts = {
@@ -344,6 +406,14 @@ def init_db():
             "ALTER TABLE posts ADD COLUMN views_count "
             "INTEGER NOT NULL DEFAULT 0"
         )
+
+    for col, ddl in (("meet_place", "TEXT NOT NULL DEFAULT ''"), ("meet_lat", "REAL"), ("meet_lng", "REAL"),
+                     ("new_price_cents", "INTEGER NOT NULL DEFAULT 0"),      # precio nuevo declarado (opcional)
+                     ("closed_at", "INTEGER NOT NULL DEFAULT 0"),
+                     ("featured_until", "INTEGER NOT NULL DEFAULT 0"),       # destacada hasta (US-14)
+                     ("featured_at", "INTEGER NOT NULL DEFAULT 0")):           # cuándo se reutilizó (vendido/entregado)
+        if col not in have_posts:
+            con.execute(f"ALTER TABLE posts ADD COLUMN {col} {ddl}")
 
     if "approved_price_cents" not in have_posts:
         con.execute("ALTER TABLE posts ADD COLUMN approved_price_cents INTEGER NOT NULL DEFAULT -1")

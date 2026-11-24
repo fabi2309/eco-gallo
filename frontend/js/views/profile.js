@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { esc, icon, money, avatar, badges, toast, timeAgo, TIPO, carreraOptions, bindCentro, pwField, wirePw, pwProblem } from "../ui.js";
 import { state as appState } from "../main.js";
 import { card } from "./home.js";
+import { phoneDialog, payoutDialog } from "../payflow.js";
 
 export async function render(root, ctx) {
   if (ctx.extra === "mine") return mine(root);
@@ -14,8 +15,21 @@ async function mine(root, page = 1) {
   const { posts, pages } = await api.get(`/api/posts?mine=1&page=${page}`);
   const live = posts.filter((p) => ["pending", "active", "paused", "reserved"].includes(p.status));
   const done = posts.filter((p) => p.status === "sold");
+  const st = await api.get("/api/posts/stats/mine").catch(() => null);
+  const t = st?.totals;
   root.innerHTML = `
     <div class="row"><h1 class="grow">Mis publicaciones</h1><a class="btn accent" href="#/new">${icon("plus")} Publicar</a></div>
+    ${t && t.posts ? `<div class="panelbox stack" style="margin-top:14px"><h3>${icon("chart")} Estadísticas de tus anuncios</h3>
+      <div class="kpis">
+        <div class="kpi"><div class="n">${t.views}</div><div class="muted small">Vistas</div></div>
+        <div class="kpi"><div class="n">${t.contacts}</div><div class="muted small">Personas que te escribieron</div></div>
+        <div class="kpi"><div class="n">${t.favorites}</div><div class="muted small">Guardados en favoritos</div></div>
+        <div class="kpi"><div class="n">${t.reused}</div><div class="muted small">Entregados · ${money(t.earned_cents)}</div></div>
+      </div>
+      <details><summary class="small">Ver por publicación</summary>
+        <div class="tablewrap"><table class="stats"><thead><tr><th>Publicación</th><th>Vistas</th><th>Contactos</th><th>Favoritos</th><th>Tasa de contacto</th></tr></thead>
+        <tbody>${st.posts.map((r) => `<tr><td><a href="#/post/${r.id}">${esc(r.title)}</a></td><td>${r.views}</td><td>${r.contacts}</td><td>${r.favorites}</td><td>${Math.round(r.contact_rate * 100)}%</td></tr>`).join("")}</tbody></table></div>
+      </details></div>` : ""}
     ${live.length ? `<div class="grid" style="margin-top:18px">${live.map(card).join("")}</div>`
       : `<div class="empty">${icon("list")}<h2>No tienes publicaciones activas</h2><p>Lo que ya no uses puede ayudar a otro estudiante.</p><a class="btn" href="#/new">Publicar mi primer artículo</a></div>`}
     ${done.length ? `<div class="sectionhd"><h2>Ya entregados</h2></div><div class="grid">${done.map(card).join("")}</div>` : ""}`;
@@ -34,16 +48,7 @@ try {
 } catch {
   // Stripe todavía no está configurado o disponible.
 }
-  root.innerHTML = `
-  <div style="max-width:720px;margin:0 auto" class="stack">
-    <div class="row"><div class="avbox">${avatar(u, "big")}<label class="avedit" title="Cambiar foto" aria-label="Cambiar foto de perfil">${icon("camera")}<input type="file" id="avfile" accept="image/jpeg,image/png,image/webp" hidden></label></div>
-      <div class="grow"><h1 style="font-size:1.6rem">${esc(u.name)}</h1><div class="muted">${esc(u.email)}</div>${u.bio ? `<div class="small bio">${esc(u.bio)}</div>` : ""}
-        ${u.avatar ? '<button class="linkbtn" id="avdel">Quitar foto</button>' : ""}
-        ${u.kind === "egresado" && !(u.badges && u.badges.egresado) ? `<span class="pill">${icon("shield")} Egresado · en revisión</span>` : ""}
-        <div class="insignias under">${badges(u)}</div></div></div>
-    <div class="kpis"><div class="kpi"><div class="n">${money(w.available_cents)}</div><div class="muted small">Cobrado por ventas</div></div>
-      <div class="kpi"><div class="n">${money(w.pending_cents)}</div><div class="muted small">Retenido, por liberar</div></div></div>
-      <div class="panelbox stack" id="connect-panel">
+  const stripePanel = `<div class="panelbox stack" id="connect-panel">
   <h3>Pagos y cuenta de vendedor</h3>
   ${connectStatus === null
   ? `<p class="muted small">Stripe no está configurado o disponible en este entorno.</p>`
@@ -53,7 +58,18 @@ try {
       ? `<p class="muted small">Tu cuenta de vendedor está conectada y habilitada para recibir transferencias.</p>`
       : `<p class="muted small">Completa la verificación de Stripe para recibir pagos por tus ventas.</p>
          <button class="btn" id="connect-start">Configurar pagos con Stripe</button>`}
-</div>
+</div>`;
+  root.innerHTML = `
+  <div style="max-width:720px;margin:0 auto" class="stack">
+    <div class="row"><div class="avbox">${avatar(u, "big")}<label class="avedit" title="Cambiar foto" aria-label="Cambiar foto de perfil">${icon("camera")}<input type="file" id="avfile" accept="image/jpeg,image/png,image/webp" hidden></label></div>
+      <div class="grow"><h1 style="font-size:1.6rem">${esc(u.name)}</h1><div class="muted">${esc(u.email)}</div>${u.bio ? `<div class="small bio">${esc(u.bio)}</div>` : ""}
+        ${u.avatar ? '<button class="linkbtn" id="avdel">Quitar foto</button>' : ""}
+        ${u.kind === "egresado" && !(u.badges && u.badges.egresado) ? `<span class="pill">${icon("shield")} Egresado · en revisión</span>` : ""}
+        <div class="insignias under">${badges(u)}</div></div></div>
+    <div class="kpis"><div class="kpi"><div class="n">${money(w.available_cents)}</div><div class="muted small">Cobrado por ventas</div></div>
+      <div class="kpi"><div class="n">${money(w.pending_cents)}</div><div class="muted small">Retenido, por liberar</div></div></div>
+    ${cardPanel(u, meta)}
+    ${meta.payment_provider === "stripe" ? stripePanel : ""}
     <div class="panelbox stack"><h3>Mis datos</h3>
       <form id="f" class="stack">
         <label class="field">Nombre completo<input class="input" name="name" value="${esc(u.name)}" required minlength="3" maxlength="80"></label>
@@ -123,8 +139,19 @@ try {
     <div class="panelbox stack"><h3>Historial de actividad</h3>
       <div class="tabs scroll" role="tablist" id="acttabs">${ACT_TABS.map(([k, l]) => `<button role="tab" data-k="${k}" aria-selected="${k === "todo"}">${l}</button>`).join("")}</div>
       <div id="actbox" aria-live="polite"></div></div>
+    <div class="panelbox stack" id="notif-panel"><h3>App y avisos en este dispositivo</h3>
+      <p class="muted small">Recibe un aviso del navegador cuando te escriban o haya novedades, aunque estés en otra pestaña.</p>
+      <div id="notif-state"></div>
+      <div id="install-box"></div></div>
+    ${privacyPanel(u, state)}
     <div class="row wrap">${u.role === "admin" ? '<a class="btn" href="#/admin">Administración</a>' : ""}<a class="btn ghost" href="#/wishlist">${icon("heart")} Mi lista de deseos</a><a class="btn ghost" href="#/impact">${icon("leaf")} Impacto de la comunidad</a></div>
   </div>`;
+  root.querySelector("#phone-btn")?.addEventListener("click", async () => {
+    if (await phoneDialog(state)) ctxRefresh();
+  });
+  root.querySelector("#payout-btn")?.addEventListener("click", async () => {
+    if (await payoutDialog(state)) ctxRefresh();
+  });
   root.querySelector("#connect-start")?.addEventListener("click", async () => {
   const button = root.querySelector("#connect-start");
   button.disabled = true;
@@ -286,6 +313,9 @@ try {
       message.innerHTML = `<p class="error">${esc(err.message)}</p>`;
     }
   });
+  wirePrivacy(root, u);
+  wireNotifications(root.querySelector("#notif-state"));
+  wireInstall(root.querySelector("#install-box"));
   bindCentro(root.querySelector("#f [name=carrera]"), root.querySelector("#centro"), meta);
   wirePw(root);
   root.querySelector("#pw").onsubmit = async (e) => {
@@ -302,23 +332,129 @@ try {
   };
 }
 
+// ---------------------------------------------------------------- instalar como app (PWA)
+async function wireInstall(box) {
+  const { installPrompt } = await import("../main.js");
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const paint = (prompt) => {
+    if (standalone) { box.innerHTML = `<span class="pill ok">${icon("check")} Estás usando la app instalada</span>`; return; }
+    if (prompt) {
+      box.innerHTML = `<button class="btn ghost" id="install">${icon("plus")} Instalar ECO-GALLO en este dispositivo</button>`;
+      box.querySelector("#install").onclick = async () => { prompt.prompt(); await prompt.userChoice; paint(null); };
+    } else {
+      box.innerHTML = `<p class="muted small">${ios ? "En iPhone: toca Compartir y luego «Agregar a pantalla de inicio»."
+        : "Para instalarla, abre el menú del navegador y elige «Instalar app» o «Agregar a la pantalla principal»."}</p>`;
+    }
+  };
+  paint(installPrompt);
+  document.addEventListener("eg:installable", async () => paint((await import("../main.js")).installPrompt), { once: true });
+}
+
+// ---------------------------------------------------------------- avisos del navegador
+function wireNotifications(box) {
+  const paint = () => {
+    if (!("Notification" in window)) { box.innerHTML = '<p class="muted small">Este navegador no admite avisos.</p>'; return; }
+    const p = Notification.permission;
+    box.innerHTML = p === "granted" ? `<span class="pill ok">${icon("bell")} Avisos activados</span>`
+      : p === "denied" ? '<p class="notice">Bloqueaste los avisos para este sitio. Puedes permitirlos desde la configuración del navegador (icono del candado junto a la dirección).</p>'
+      : `<button class="btn ghost" id="notif-on">${icon("bell")} Activar avisos</button>`;
+    box.querySelector("#notif-on")?.addEventListener("click", async () => { await Notification.requestPermission(); paint(); });
+  };
+  paint();
+}
+
+// ---------------------------------------------------------------- privacidad y derechos ARCO
+function privacyPanel(u, state) {
+  const accepted = u.terms_accepted_at
+    ? `Aceptaste el aviso de privacidad y los términos (versión ${esc(u.terms_version)}) el ${new Date(u.terms_accepted_at * 1000).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" })}.`
+    : "";
+  const canProve = u.has_password || state.passwordResetAllowed;
+  return `<div class="panelbox stack" id="privacy-panel"><h3>Privacidad y mis datos</h3>
+    <p class="muted small">${accepted} Consulta el <a href="#/privacidad">aviso de privacidad</a> y los <a href="#/terminos">términos de uso</a>.</p>
+    <div class="row wrap"><button class="btn ghost" id="export-data">${icon("note")} Descargar mis datos</button></div>
+    <p class="muted small">Recibes un archivo con tu perfil, publicaciones, mensajes, compras, ventas, deseos y avisos (derecho de acceso). Para corregir tus datos usa «Mis datos» arriba.</p>
+    <details class="danger-zone"><summary>Eliminar mi cuenta</summary>
+      <div class="stack">
+        <p class="small">Se borran tu nombre, correo, foto, biografía, publicaciones, fotos, deseos y avisos, y el texto de los mensajes que enviaste. Solo conservamos montos y estados de operaciones pasadas sin datos que te identifiquen. <b>No se puede deshacer.</b></p>
+        ${u.role === "admin" ? '<p class="notice">Las cuentas de administración no pueden darse de baja solas. Pide que te retiren el rol primero.</p>'
+          : !canProve ? '<p class="notice">Por seguridad, cierra sesión y vuelve a entrar con un código a tu correo. Después tendrás 10 minutos para eliminar tu cuenta.</p>'
+          : `<form id="del-account" class="stack" novalidate>
+          ${u.has_password ? pwField("password", "Tu contraseña", { autocomplete: "current-password" }) : '<p class="muted small">Entraste con un código a tu correo hace poco: no necesitas contraseña.</p>'}
+          ${u.totp_enabled ? '<label class="field">Código de tu autenticador<input class="input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>' : ""}
+          <label class="field"><span>Escribe <b>ELIMINAR</b> para confirmar</span><input class="input" name="confirm" autocomplete="off" required></label>
+          <div id="delerr"></div>
+          <button class="btn danger">Eliminar mi cuenta definitivamente</button></form>`}
+      </div></details></div>`;
+}
+
+function wirePrivacy(root, u) {
+  root.querySelector("#export-data").onclick = async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      const res = await fetch("/api/me/export", { credentials: "same-origin" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "No se pudo generar el archivo.");
+      const url = URL.createObjectURL(await res.blob());
+      const a = Object.assign(document.createElement("a"), { href: url, download: "mis-datos-ecogallo.json" });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast("Descargamos tus datos");
+    } catch (err) { toast(err.message, true); }
+    btn.disabled = false;
+  };
+  const f = root.querySelector("#del-account");
+  if (!f) return;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(f));
+    const err = (t) => (root.querySelector("#delerr").innerHTML = `<div class="error" role="alert">${esc(t)}</div>`);
+    if (fd.confirm.trim().toUpperCase() !== "ELIMINAR") return err("Escribe ELIMINAR para confirmar.");
+    if (u.has_password && !fd.password) return err("Escribe tu contraseña.");
+    if (!confirm("¿Seguro? Tu cuenta y tus datos se eliminarán y no podrás recuperarlos.")) return;
+    try {
+      await api.del("/api/me", fd);
+      appState.user = null;
+      toast("Tu cuenta fue eliminada");
+      location.hash = "#/"; location.reload();
+    } catch (er) { err(er.message); }
+  };
+}
+
 async function impact(root) {
-  const s = await api.get("/api/impact");
-  const cats = Object.entries(s.posts_by_category).sort((a, b) => b[1] - a[1]);
-  const max = Math.max(1, ...cats.map((c) => c[1]));
-  root.innerHTML = `
+  const draw = (s) => {
+    const cats = Object.entries(s.posts_by_category).sort((a, b) => b[1] - a[1]);
+    const max = Math.max(1, ...cats.map((c) => c[1]));
+    const mmax = Math.max(1, ...s.monthly.map((m) => m.items));
+    const tipo = s.reused_by_tipo || {};
+    root.innerHTML = `
   <div class="stack">
-    <div><h1>Impacto de la comunidad</h1><p class="muted">Lo que la UAA ha reutilizado en lugar de comprar nuevo o tirar.</p></div>
+    <div><h1>Impacto de la comunidad</h1><p class="muted">Lo que la UAA ha reutilizado en lugar de comprar nuevo o tirar. <span class="small" id="upd">Actualizado ${new Date(s.updated_at * 1000).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · se actualiza solo</span></p></div>
     <div class="kpis">
-      <div class="kpi"><div class="n">${s.reused_items}</div><div class="muted small">Artículos reutilizados</div></div>
+      <div class="kpi"><div class="n">${money(s.savings_cents)}</div><div class="muted small">Ahorro económico estimado</div></div>
       <div class="kpi"><div class="n">${s.co2_kg} kg</div><div class="muted small">CO₂e evitado (estimado)</div></div>
-      <div class="kpi"><div class="n">${s.active_posts}</div><div class="muted small">Publicaciones activas</div></div>
+      <div class="kpi"><div class="n">${s.reused_items}</div><div class="muted small">Artículos reutilizados</div></div>
       <div class="kpi"><div class="n">${s.users}</div><div class="muted small">Personas registradas</div></div>
     </div>
+    <div class="kpis">
+      <div class="kpi"><div class="n">${tipo.venta || 0}</div><div class="muted small">Vendidos</div></div>
+      <div class="kpi"><div class="n">${tipo.trueque || 0}</div><div class="muted small">Intercambiados</div></div>
+      <div class="kpi"><div class="n">${tipo.donacion || 0}</div><div class="muted small">Donados</div></div>
+      <div class="kpi"><div class="n">${s.active_posts}</div><div class="muted small">Publicaciones activas</div></div>
+    </div>
+    <div class="panelbox stack"><h3>Reutilización por mes</h3>
+      <div class="bars">${s.monthly.length ? s.monthly.map((m) => `<div class="bar wide"><span>${esc(m.month)}</span><i style="width:${(m.items / mmax) * 100}%"></i><b>${m.items} · ${money(m.savings_cents)}</b></div>`).join("") : '<p class="muted">Aún no hay artículos reutilizados.</p>'}</div></div>
     <div class="panelbox stack"><h3>Publicaciones por categoría</h3>
       <div class="bars">${cats.length ? cats.map(([c, n]) => `<div class="bar"><span>${esc(c)}</span><i style="width:${(n / max) * 100}%"></i><b>${n}</b></div>`).join("") : '<p class="muted">Aún no hay datos.</p>'}</div></div>
-    <p class="muted small">${esc(s.co2_note)} Dinero que cambió de manos por ventas completadas: ${money(s.money_cents)}.</p>
+    <p class="muted small">Cómo se calcula: ahorro = precio nuevo − precio pagado (las donaciones y trueques cuentan como $0 pagados). ${Math.round(s.declared_share * 100)}% del ahorro usa el precio nuevo que declararon los vendedores; el resto, un precio de referencia por categoría. ${esc(s.co2_note)} Dinero que cambió de manos por ventas completadas: ${money(s.money_cents)}.</p>
   </div>`;
+  };
+  draw(await api.get("/api/impact"));
+  // «Tiempo real»: se vuelve a consultar cada 15 s mientras la página está abierta y visible.
+  const timer = setInterval(async () => {
+    if (!document.body.contains(root) || location.hash !== "#/impact") return clearInterval(timer);
+    if (document.hidden) return;
+    try { draw(await api.get("/api/impact")); } catch { /* reintenta */ }
+  }, 15000);
 }
 
 // ---------------------------------------------------------------- historial de actividad (paginado)
@@ -360,4 +496,22 @@ function activity(tabs, box) {
     load();
   }));
   load();
+}
+
+
+const KIND = { tarjeta: "Tarjeta de débito", clabe: "CLABE" };
+
+function cardPanel(u, meta) {
+  const p = u.payments || {};
+  return `<div class="panelbox stack" id="cardpay-panel">
+    <h3>${icon("card")} Pagos con tarjeta</h3>
+    <p class="muted small">Para pagar o recibir pagos con tarjeta necesitas tu celular confirmado por SMS. Si un artículo no se entrega, la otra persona de la compra y administración podrán localizarte. Para pagar en efectivo no hace falta.</p>
+    <div class="payrow"><span class="payic">${icon("chat")}</span>
+      <div class="grow"><b>Celular</b><div class="muted small">${p.phone_verified ? `+52 ${esc(p.phone)} · <span class="oktxt">${icon("check")} Confirmado</span>` : "Sin confirmar"}</div></div>
+      <button class="btn ${p.phone_verified ? "ghost" : ""}" id="phone-btn">${p.phone_verified ? "Cambiar" : "Confirmar celular"}</button></div>
+    <div class="payrow"><span class="payic">${icon("cash")}</span>
+      <div class="grow"><b>Cuenta para recibir tus ventas</b><div class="muted small">${p.payout ? `${esc(KIND[p.payout.kind] || "Cuenta")} ••${esc(p.payout.last4)} · ${esc(p.payout.holder)}` : p.phone_verified ? "Agrégala para que te puedan pagar con tarjeta." : "Primero confirma tu celular."}</div></div>
+      <button class="btn ${p.payout ? "ghost" : ""}" id="payout-btn" ${p.phone_verified ? "" : "disabled"}>${p.payout ? "Cambiar" : "Agregar cuenta"}</button></div>
+    ${p.payout_ready ? `<p class="small oktxt">${icon("check")} Listo: puedes pagar y recibir pagos con tarjeta.</p>` : p.card_ready ? `<p class="small">Ya puedes pagar con tarjeta. Para que te paguen con tarjeta, agrega tu cuenta.</p>` : ""}
+  </div>`;
 }

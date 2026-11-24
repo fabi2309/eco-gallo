@@ -32,6 +32,18 @@ class _PostEditorScreenState extends State<PostEditorScreen> {
         : (widget.post!.priceCents / 100).toStringAsFixed(2),
   );
   late String tipo = widget.post?.tipo ?? 'venta';
+  late final meeting = TextEditingController(text: widget.post?.meetPlace);
+  late final latitude = TextEditingController(
+    text: widget.post?.meetLat?.toString(),
+  );
+  late final longitude = TextEditingController(
+    text: widget.post?.meetLng?.toString(),
+  );
+  late final newPrice = TextEditingController(
+    text: (widget.post?.newPriceCents ?? 0) > 0
+        ? '${widget.post!.newPriceCents / 100}'
+        : '',
+  );
   late String condition = widget.post?.condition ?? 'Usado';
   late String centro =
       widget.post?.centro ?? widget.session.user?.centro ?? 'General';
@@ -54,7 +66,15 @@ class _PostEditorScreenState extends State<PostEditorScreen> {
     super.initState();
     category = widget.post?.category;
     widget.session.addListener(_sessionChanged);
-    for (final controller in [title, description, price]) {
+    for (final controller in [
+      title,
+      description,
+      price,
+      meeting,
+      latitude,
+      longitude,
+      newPrice,
+    ]) {
       final original = controller.text;
       controller.addListener(() {
         if (!dirty && mounted && controller.text != original) {
@@ -148,6 +168,10 @@ class _PostEditorScreenState extends State<PostEditorScreen> {
           'centro': centro,
           'tipo': tipo,
           'condition': condition,
+          'meet_place': meeting.text.trim(),
+          'meet_lat': latitude.text.trim(),
+          'meet_lng': longitude.text.trim(),
+          'new_price': newPrice.text.trim(),
           'price': tipo == 'venta'
               ? price.text.trim().replaceAll(',', '.')
               : '0',
@@ -217,6 +241,10 @@ class _PostEditorScreenState extends State<PostEditorScreen> {
     title.dispose();
     description.dispose();
     price.dispose();
+    meeting.dispose();
+    latitude.dispose();
+    longitude.dispose();
+    newPrice.dispose();
     super.dispose();
   }
 
@@ -289,6 +317,56 @@ class _PostEditorScreenState extends State<PostEditorScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                ExpansionTile(
+                  title: const Text(
+                    'Punto de entrega y precio nuevo (opcional)',
+                  ),
+                  children: [
+                    TextFormField(
+                      key: const Key('post-meeting'),
+                      controller: meeting,
+                      maxLength: 120,
+                      decoration: const InputDecoration(
+                        labelText: 'Lugar de entrega',
+                      ),
+                    ),
+                    const Text(
+                      'Coordenadas aproximadas, visibles para la comunidad. No uses tu domicilio.',
+                    ),
+                    TextFormField(
+                      key: const Key('post-latitude'),
+                      controller: latitude,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Latitud opcional',
+                      ),
+                    ),
+                    TextFormField(
+                      key: const Key('post-longitude'),
+                      controller: longitude,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Longitud opcional',
+                      ),
+                    ),
+                    TextFormField(
+                      key: const Key('post-new-price'),
+                      controller: newPrice,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Precio de referencia del material nuevo',
+                      ),
+                    ),
+                  ],
+                ),
                 const Text(
                   'Dale una nueva historia',
                   style: TextStyle(

@@ -1,0 +1,23 @@
+{
+  "name": "ECO-GALLO UAA · Mercado universitario",
+  "short_name": "ECO-GALLO",
+  "description": "Compra, vende, intercambia o regala material académico dentro de la comunidad UAA.",
+  "lang": "es-MX",
+  "start_url": "/#/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f7ef",
+  "theme_color": "#1d5c3a",
+  "categories": ["education", "shopping"],
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/img/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/img/logo.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Publicar", "url": "/#/new", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Mensajes", "url": "/#/messages", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

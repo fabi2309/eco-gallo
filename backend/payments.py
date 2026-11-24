@@ -201,10 +201,33 @@ class StripeProvider(PaymentProvider):
         return {"id": refund.id, "status": refund.status}
 
 
+class MercadoPagoProvider(PaymentProvider):
+    """Checkout Pro de Mercado Pago. El cobro se confirma por consulta a la API (mercadopago.sync_group).
+
+    Liberar no mueve dinero por API: la orden queda «por liquidar» y administración paga al vendedor
+    y registra la referencia. Los reembolsos sí se hacen por API (parciales por orden).
+    """
+    name = "mercadopago"
+
+    def __init__(self):
+        if not config.MP_ACCESS_TOKEN:
+            raise RuntimeError("Falta configurar MERCADOPAGO_ACCESS_TOKEN.")
+        import mercadopago
+        self.mp = mercadopago
+
+    def release(self, order_id, charge_id, seller_account_id, amount_cents):
+        return f"MP-PAYOUT-{order_id}"
+
+    def refund(self, order_id, payment_intent_id, amount_cents):
+        return self.mp.refund(order_id, payment_intent_id, amount_cents)
+
+
 def get_provider(name=None) -> PaymentProvider:
     name = name or config.PAYMENT_PROVIDER
     if name == "stripe":
         return StripeProvider()
+    if name == "mercadopago":
+        return MercadoPagoProvider()
     if name == "simulado" and not config.PRODUCTION:
         return SimulatedProvider()
     raise RuntimeError("Los pagos están deshabilitados o requieren completar la configuración.")

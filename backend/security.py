@@ -258,7 +258,8 @@ def load_user():
 
 
 # Lo único que puede hacer un egresado mientras su documento está en revisión.
-PENDING_OK = ("auth.me", "auth.me_update", "auth.logout", "auth.set_password", "auth.resubmit_document")
+PENDING_OK = ("auth.me", "auth.me_update", "auth.logout", "auth.set_password", "auth.resubmit_document",
+              "accounts.accept_terms", "accounts.export_data", "accounts.delete_me")
 
 
 def login_required(fn):
@@ -266,7 +267,8 @@ def login_required(fn):
     def wrapper(*a, **kw):
         if not g.get("user"):
             return api_error("Inicia sesión para continuar.", 401)
-        if not g.user["name"] and request.endpoint not in ("auth.me_update", "auth.me", "auth.logout"):
+        if not g.user["name"] and request.endpoint not in (
+                "auth.me_update", "auth.me", "auth.logout", "accounts.accept_terms", "accounts.delete_me"):
             return api_error("Completa tu perfil para continuar.", 403, needs_profile=True)
         if g.user["kind"] == "egresado" and g.user["verif_status"] != "approved" \
                 and request.endpoint not in PENDING_OK:

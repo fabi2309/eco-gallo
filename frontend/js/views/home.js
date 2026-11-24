@@ -7,9 +7,10 @@ export function card(p) {
   const price = p.tipo === "venta" ? money(p.price_cents) : TIPO[p.tipo];
   return `<a class="card" href="#/post/${p.id}">
     <div class="ph">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<div class="noimg">${icon("image")}</div>`}
-      <span class="tag ${esc(p.tipo)}">${esc(TIPO[p.tipo])}</span>${p.status === "reserved" ? '<span class="tag reserved">Reservado</span>' : ""}${p.status === "pending" ? '<span class="tag reserved">En revisión</span>' : ""}${p.status === "paused" ? '<span class="tag reserved">Pausada</span>' : ""}</div>
+      <span class="tag ${esc(p.tipo)}">${esc(TIPO[p.tipo])}</span>${p.featured && p.status === "active" ? `<span class="tag featured">${icon("star")} Destacado</span>` : ""}${p.status === "reserved" ? '<span class="tag reserved">Reservado</span>' : ""}${p.status === "pending" ? '<span class="tag reserved">En revisión</span>' : ""}${p.status === "paused" ? '<span class="tag reserved">Pausada</span>' : ""}</div>
     <div class="body"><div class="title">${esc(p.title)}</div><div class="price">${esc(price)}</div>
     <div class="muted small">${esc(p.condition)} · ${esc(p.author.name || "Usuario")} ${badges(p.author, { compact: true })}</div>
+    ${p.distance_km != null ? `<div class="small dist">${icon("pin")} a ${p.distance_km < 1 ? Math.round(p.distance_km * 1000) + " m" : p.distance_km.toFixed(1) + " km"}</div>` : ""}
     ${p.stats ? `<div class="row small muted" style="margin-top:6px;gap:10px;border-top:1px solid var(--border);padding-top:4px"><span title="Vistas">${icon("eye")} ${p.stats.views || 0}</span><span title="Contactos">${icon("chat")} ${p.stats.contacts || 0}</span><span title="Interesados">${icon("heart")} ${p.stats.interested || 0}</span></div>` : ""}
     </div></a>`;
 }
@@ -43,7 +44,8 @@ function hero(state) {
 
 export async function render(root, { state }) {
   const meta = state.meta;
-  const defaults = { q: "", category: "todos", tipo: "todos", centro: "todos", sort: "nuevo", condition: "todos", min: "", max: "" };
+  const defaults = { q: "", category: "todos", tipo: "todos", centro: "todos", sort: "nuevo", condition: "todos", min: "", max: "", radius: "" };
+  let here = null;   // ubicación del usuario: solo en memoria, nunca se guarda
   const f = { ...defaults, ...JSON.parse(sessionStorage.getItem("eg_filters") || "{}") };
 
   root.innerHTML = `
@@ -60,7 +62,9 @@ export async function render(root, { state }) {
         <select class="input" id="condition" aria-label="Estado del producto"><option value="todos">Cualquier estado</option>${meta.conditions.map((c) => `<option ${f.condition === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
         <input class="input" id="min" type="number" min="0" step="1" inputmode="numeric" placeholder="Precio mín. $" aria-label="Precio mínimo" value="${esc(f.min)}">
         <input class="input" id="max" type="number" min="0" step="1" inputmode="numeric" placeholder="Precio máx. $" aria-label="Precio máximo" value="${esc(f.max)}">
+        <select class="input" id="radius" aria-label="Distancia"><option value="">Distancia: todas</option>${[["1", "A 1 km de mí"], ["5", "A 5 km de mí"], ["10", "A 10 km de mí"], ["25", "A 25 km de mí"]].map(([v, t]) => `<option value="${v}" ${f.radius === v ? "selected" : ""}>${t}</option>`).join("")}</select>
       </div>
+      <p class="small muted hidden" id="geoNote" role="status"></p>
       <div class="row wrap" id="recent"></div>
     </section>
     <div class="sectionhd"><h2>Disponible ahora</h2><span class="muted small" id="count"></span></div>
@@ -73,6 +77,7 @@ export async function render(root, { state }) {
     const requestId = ++sequence;
     sessionStorage.setItem("eg_filters", JSON.stringify(f));
     const qs = new URLSearchParams({ q: f.q, category: f.category, tipo: f.tipo, centro: f.centro, sort: f.sort, condition: f.condition, min_price: f.min, max_price: f.max });
+    if (f.radius && here) { qs.set("lat", here.lat); qs.set("lng", here.lng); qs.set("radius_km", f.radius); if (f.sort === "nuevo") qs.set("sort", "cerca"); }
     qs.set("page", page);
     const { posts, pages, total } = await api.get("/api/posts?" + qs);
     if (requestId !== sequence) return;
@@ -191,8 +196,28 @@ export async function render(root, { state }) {
   }));
 
   for (const id of ["tipo", "centro", "sort", "condition"]) root.querySelector("#" + id).onchange = (e) => { f[id] = e.target.value; load(); };
+
+  // Cerca de mí: pide la ubicación al navegador solo cuando el usuario elige una distancia.
+  const note = (t) => { const n = root.querySelector("#geoNote"); if (n) { n.textContent = t; n.classList.toggle("hidden", !t); } };
+  const locate = () => new Promise((ok, ko) => {
+    if (!navigator.geolocation) return ko(new Error("Tu navegador no permite obtener la ubicación."));
+    navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      (e) => ko(new Error(e.code === 1 ? "No diste permiso para usar tu ubicación." : "No pudimos obtener tu ubicación.")),
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+  });
+  const radiusSel = root.querySelector("#radius");
+  const applyRadius = async () => {
+    f.radius = radiusSel.value;
+    if (f.radius && !here) {
+      note("Obteniendo tu ubicación…");
+      try { here = await locate(); } catch (e) { note(e.message + " Mostrando todo el catálogo."); f.radius = ""; radiusSel.value = ""; return load(); }
+    }
+    note(f.radius ? `Mostrando publicaciones con punto de entrega a menos de ${f.radius} km de ti, de la más cercana a la más lejana. Tu ubicación no se guarda.` : "");
+    load();
+  };
+  radiusSel.onchange = applyRadius;
   
   api.get("/api/impact").then((s) => root.querySelectorAll("#stats [data-n]").forEach((el) => countUp(el, s[el.dataset.n] || 0, { decimals: +(el.dataset.d || 0) }))).catch(() => {});
   
-  await load();
+  if (f.radius) await applyRadius(); else await load();
 }

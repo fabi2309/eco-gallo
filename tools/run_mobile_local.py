@@ -11,7 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def configure(data: Path):
+def configure(data: Path, local_codes=False):
     data = data.resolve()
     database = data / 'ecogallo.sqlite'
     if not database.is_file() or not (data / 'secret.key').is_file():
@@ -25,11 +25,15 @@ def configure(data: Path):
             source.backup(destination)
     os.environ.update({
         'ECOGALLO_DATA': str(data), 'ECOGALLO_ENV': 'development',
-        'ECOGALLO_DEV': '0', 'ECOGALLO_SEED': '0', 'ECOGALLO_ADMINS': '',
+        'ECOGALLO_DEV': '1' if local_codes else '0', 'ECOGALLO_SEED': '0', 'ECOGALLO_ADMINS': '',
+        'ECOGALLO_ADMIN_PASSWORD': '', 'ECOGALLO_NO_DOTENV': '1',
         'ECOGALLO_PUBLIC_URL': '', 'ECOGALLO_SECURE': '0',
         'PAYMENT_PROVIDER': 'simulado', 'ECOGALLO_LIVE_PAYMENTS': '0',
         'ECOGALLO_CONNECT_SIMULATED': '0', 'ECOGALLO_RECONCILE_ENABLED': '0',
         'STRIPE_SECRET_KEY': '', 'STRIPE_PUBLISHABLE_KEY': '', 'STRIPE_WEBHOOK_SECRET': '',
+        'MERCADOPAGO_ACCESS_TOKEN': '', 'MERCADOPAGO_WEBHOOK_SECRET': '',
+        **({'TWILIO_ACCOUNT_SID': '', 'TWILIO_AUTH_TOKEN': '', 'TWILIO_FROM': '',
+            'ECOGALLO_SMTP_HOST': ''} if local_codes else {}),
     })
     # SMTP environment settings are preserved. Without SMTP, use an existing
     # password: access codes are never returned to clients on the LAN.
@@ -47,9 +51,12 @@ def local_addresses():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--usb', action='store_true', help='Escuchar solo en la propia PC para el túnel USB')
+    parser.add_argument('--codigos-locales', action='store_true', help='Códigos ficticios de correo/SMS, solo con --usb')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--data', type=Path, default=ROOT / 'data', help='Carpeta existente de datos del proyecto')
     args = parser.parse_args()
+    if args.codigos_locales and not args.usb:
+        parser.error('--codigos-locales requiere --usb; no se muestran códigos en la red local.')
     if not 1 <= args.port <= 65535:
         parser.error('El puerto debe estar entre 1 y 65535.')
     host = '127.0.0.1' if args.usb else '0.0.0.0'
@@ -60,7 +67,7 @@ def main():
         except OSError:
             raise SystemExit(f'El puerto {args.port} está ocupado. Detén el servidor anterior desde su terminal.')
     try:
-        backup = configure(args.data)
+        backup = configure(args.data, local_codes=args.codigos_locales)
     except ValueError as error:
         raise SystemExit(str(error))
     sys.path.insert(0, str(ROOT))

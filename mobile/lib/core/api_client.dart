@@ -201,9 +201,7 @@ class ApiClient {
           data: body,
         );
       }
-      if (path.startsWith('/api/threads/') ||
-          path == '/api/messages' ||
-          path == '/api/notifications/read') {
+      if (path == '/api/messages' || path == '/api/notifications/read') {
         onInboxChanged?.call();
       }
       return body;

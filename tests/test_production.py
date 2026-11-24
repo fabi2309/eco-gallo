@@ -10,6 +10,7 @@ def test_production_app_can_boot_without_enabling_payments(tmp_path):
     env.update(ECOGALLO_ENV='production', ECOGALLO_DEV='0', ECOGALLO_SEED='0',
                ECOGALLO_SECURE='1', ECOGALLO_PUBLIC_URL='https://market.example',
                ECOGALLO_SECRET='test-only-persistent-secret-at-least-32-chars', ECOGALLO_SMTP_HOST='smtp.example',
+               ECOGALLO_PRIVACY_EMAIL='privacidad@market.example', ECOGALLO_NO_DOTENV='1',
                ECOGALLO_DATA=str(tmp_path), ECOGALLO_BACKUP_ENABLED='0', ECOGALLO_RECONCILE_ENABLED='0',
                PAYMENT_PROVIDER='disabled', STRIPE_SECRET_KEY='', ECOGALLO_CONNECT_SIMULATED='0')
     script = '''from webapp import app

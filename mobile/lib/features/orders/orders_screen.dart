@@ -6,6 +6,7 @@ import '../../ui/shared.dart';
 import '../community/chat_screen.dart';
 
 const orderStatuses = {
+  'CASH_PENDING': 'Efectivo pendiente al entregar',
   'HELD': 'Pago retenido',
   'DELIVERED': 'Entrega indicada',
   'RELEASED': 'Completado',
@@ -18,6 +19,8 @@ const orderStatuses = {
   'PAYMENT_REVIEW': 'Revisión administrativa',
 };
 const orderActionLabels = {
+  'cash_received': 'Registrar efectivo recibido',
+  'cancel_cash': 'Cancelar apartado en efectivo',
   'deliver': 'Marcar entrega',
   'confirm': 'Confirmar recepción',
   'dispute': 'Abrir disputa',
@@ -119,12 +122,14 @@ class OrderDetailScreen extends StatelessWidget {
           'confirm' => 'Confirma únicamente si recibiste el material. Se completará el pedido y se liberará el saldo ficticio al vendedor.',
           'deliver' => 'Indicarás que entregaste el material. El comprador debe confirmar su recepción.',
           'refund' => 'El pago ficticio se devolverá al comprador y el material volverá a estar disponible.',
+          'cash_received' => 'Confirma solo si entregaste el material y recibiste el efectivo. La plataforma no mueve dinero.',
+          'cancel_cash' => 'El material volverá a estar disponible. No hay dinero que reembolsar en la plataforma.',
           _ => 'Resolverás esta operación de demostración. Revisa el historial antes de continuar.',
         };
         if (!await confirmAction(
           context,
           orderActionLabels[action]!,
-          '$explanation\n\nSolo simulación: no se mueve dinero real.',
+          explanation,
         )) {
           return;
         }
@@ -144,8 +149,16 @@ class OrderDetailScreen extends StatelessWidget {
     content: (context, data, state) {
       final order = data['order'] as Json;
       final simulated = order['simulated'] == true;
+      final cash =
+          order['payment_provider'] == 'efectivo' ||
+          order['payment_method'] == 'efectivo' ||
+          order['status'] == 'CASH_PENDING';
       return [
-        if (simulated)
+        if (cash)
+          const Text(
+            'Efectivo entre participantes. La plataforma registra el acuerdo; no cobra ni transfiere dinero.',
+          )
+        else if (simulated)
           const PaymentNotice('demo')
         else
           const Text(
@@ -187,7 +200,7 @@ class OrderDetailScreen extends StatelessWidget {
             icon: const Icon(Icons.chat_outlined),
             label: const Text('Conversar sobre el pedido'),
           ),
-        if (simulated) ...[
+        if (simulated || cash) ...[
           for (final action in List<String>.from(order['actions'] as List))
             if (orderActionLabels.containsKey(action))
               Padding(

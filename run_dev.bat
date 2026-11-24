@@ -1,9 +1,7 @@
 @echo off
 REM ECO-GALLO UAA - Arranca en modo desarrollo 100% Python (sin necesidad de Java)
 cd /d "%~dp0"
-if "%ECOGALLO_SEED%"=="" set ECOGALLO_SEED=1
-if "%ECOGALLO_DEV%"=="" set ECOGALLO_DEV=1
-if "%ECOGALLO_ADMINS%"=="" set ECOGALLO_ADMINS=admin@edu.uaa.mx
+REM Los valores salen de .env (si existe) y, si faltan, de run_dev.py.
 if "%PORT%"=="" set PORT=8080
 if not exist .venv\Scripts\python.exe python -m venv .venv
 if errorlevel 1 exit /b 1

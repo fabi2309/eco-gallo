@@ -103,11 +103,26 @@ buyer = login(f"al{tag}b@edu.uaa.mx", "Comprador Prueba")
 s, r = buyer.call("GET", f"/api/posts?q=prueba"); check(s == 200 and any(p["id"] == pid for p in r["posts"]), "búsqueda encuentra la publicación")
 s, r = seller.call("POST", "/api/orders", {"post_id": pid}); check(s == 400, "no puedes comprar lo tuyo")
 
+print("Teléfono confirmado por SMS y tarjeta")
+CARD = {"brand": "visa", "last4": "4242", "exp_month": 12, "exp_year": 2035, "holder": "Comprador Prueba"}
+s, r = buyer.call("POST", "/api/orders", {"post_id": pid, "card": CARD}); check(s == 409, "sin teléfono confirmado no se paga con tarjeta")
+import random
+for cl, number in ((buyer, f"449 {random.randint(1000000, 9999999)}"), (seller, f"+52 448 {random.randint(1000000, 9999999)}")):
+    s, r = cl.call("POST", "/api/me/phone", {"phone": number}); check(s == 200 and "dev_code" in r, "envía SMS (en desarrollo el código se muestra)")
+    s2, r2 = cl.call("POST", "/api/me/phone/verify", {"code": "000000" if r["dev_code"] != "000000" else "111111"})
+    check(s2 == 400, "código de SMS incorrecto rechazado")
+    s2, r2 = cl.call("POST", "/api/me/phone/verify", {"code": r["dev_code"]}); check(s2 == 200 and r2["payments"]["phone_verified"], "teléfono confirmado")
+s, r = buyer.call("POST", "/api/orders", {"post_id": pid, "card": CARD}); check(s == 409, "el vendedor sin cuenta para recibir no acepta tarjeta")
+s, r = seller.call("PUT", "/api/me/payout", {"kind": "clabe", "last4": "1234", "holder": "Vendedor Prueba"}); check(s == 200 and r["payments"]["payout_ready"], "vendedor registra cuenta para recibir")
+s, r = buyer.call("POST", "/api/orders", {"post_id": pid, "card": {**CARD, "exp_year": 2020}}); check(s == 400, "tarjeta vencida rechazada")
+
 print("Pago retenido")
-s, r = buyer.call("POST", "/api/orders", {"post_id": pid}); check(s == 201, "comprador paga → HELD")
+s, r = buyer.call("POST", "/api/orders", {"post_id": pid, "card": CARD}); check(s == 201, "comprador paga → HELD")
 oid = r["id"]
+s, r = seller.call("GET", f"/api/orders/{oid}"); check(r["order"]["buyer"].get("phone") and "card" not in r["order"], "el vendedor ve el teléfono del comprador, no su tarjeta")
+s, r = buyer.call("GET", f"/api/orders/{oid}"); check(r["order"]["seller"].get("phone") and r["order"]["card"]["last4"] == "4242", "el comprador ve el teléfono del vendedor y su tarjeta ••4242")
 other = login(f"al{tag}c@edu.uaa.mx", "Otro Comprador")
-s, r = other.call("POST", "/api/orders", {"post_id": pid}); check(s == 409, "nadie más puede comprarlo (reservado)")
+s, r = other.call("POST", "/api/orders", {"post_id": pid, "card": CARD}); check(s == 409, "nadie más puede comprarlo (reservado)")
 s, r = other.call("GET", f"/api/orders/{oid}"); check(s == 404, "terceros no ven la orden")
 s, r = seller.call("GET", "/api/wallet"); check(r["available_cents"] == 0 and r["pending_cents"] == 20000, "dinero pendiente, no disponible")
 s, r = seller.call("POST", f"/api/orders/{oid}/confirm"); check(s == 403, "el vendedor NO puede liberar su propio pago")
@@ -123,7 +138,7 @@ print("Disputa y reembolso")
 body, h = multipart({"title": "Calculadora", "description": "Calculadora en buen estado.", "category": "Tecnología",
                      "tipo": "venta", "price": "100.50", "condition": "Usado"})
 s, r = seller.call("POST", "/api/posts", raw=body, headers=h); pid2 = approve(r["id"])
-s, r = buyer.call("POST", "/api/orders", {"post_id": pid2}); oid2 = r["id"]
+s, r = buyer.call("POST", "/api/orders", {"post_id": pid2, "card": CARD}); oid2 = r["id"]
 s, r = buyer.call("POST", f"/api/orders/{oid2}/dispute", {"reason": "x"}); check(s == 400, "disputa exige motivo")
 s, r = buyer.call("POST", f"/api/orders/{oid2}/dispute", {"reason": "No llegó el artículo al punto de encuentro."}); check(s == 200, "abre disputa")
 s, r = seller.call("POST", f"/api/orders/{oid2}/refund"); check(s == 403, "vendedor no puede reembolsar en disputa (decide admin)")
@@ -154,8 +169,12 @@ print("Egresados")
 admin2 = admin  # ya inició sesión arriba
 pdf = b"%PDF-1.4\n" + b"0" * 64
 em = f"egresado{tag}@gmail.com"
-fields = {"email": em, "name": "Eva Egresada", "carrera": "Licenciatura en Derecho", "doc_type": "kardex", "password": "clave12345"}
+legal_version = Client().call("GET", "/api/meta")[1]["legal"]["version"]
+fields = {"email": em, "name": "Eva Egresada", "carrera": "Licenciatura en Derecho", "doc_type": "kardex", "password": "clave12345",
+          "accept_terms": legal_version}
 ec = Client()
+body, h = multipart({k: v for k, v in fields.items() if k != "accept_terms"}, [("document", "k.pdf", pdf)]); s, r = ec.call("POST", "/api/auth/egresado", raw=body, headers=h)
+check(s == 400, "egresado: sin aceptar aviso de privacidad y términos no se registra")
 body, h = multipart(fields, [("document", "x.exe", b"MZ\x90\x00 no soy imagen")]); s, r = ec.call("POST", "/api/auth/egresado", raw=body, headers=h)
 check(s == 400, "rechaza archivo que no es imagen/PDF (se revisa el contenido, no la extensión)")
 body, h = multipart({**fields, "carrera": "Hechicería"}, [("document", "k.pdf", pdf)]); s, r = ec.call("POST", "/api/auth/egresado", raw=body, headers=h)

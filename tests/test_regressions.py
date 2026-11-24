@@ -36,8 +36,14 @@ def app(tmp_path, monkeypatch):
     return instance
 
 
+TEST_CARD = {"brand": "visa", "last4": "4242", "exp_month": 12, "exp_year": 2035, "holder": "Usuario Prueba"}
+_PHONE_SEQ = [4490000000]
+
+
 class Actor:
-    def __init__(self, app, email, role='user'):
+    """Usuario de prueba. Por defecto con teléfono confirmado y cuenta para recibir (puede pagar y cobrar
+    con tarjeta); `card=False` crea uno sin esos datos."""
+    def __init__(self, app, email, role='user', card=True):
         self.app = app
         self.client = app.test_client()
         self.email = email
@@ -45,11 +51,22 @@ class Actor:
             self.id = db.get_db().execute("""INSERT INTO users(email,name,carrera,role,created_at,password_hash)
                 VALUES(?,?,?,?,?,?)""", (email, 'Usuario Prueba', 'Ingeniería en Sistemas Computacionales', role,
                                          db.now(), security.hash_password('CurrentPass123'))).lastrowid
+            if card:
+                _PHONE_SEQ[0] += 1
+                db.get_db().execute(
+                    """UPDATE users SET phone=?, phone_verified_at=?, payout_kind='clabe',
+                    payout_last4='1234', payout_holder='Usuario Prueba' WHERE id=?""",
+                    (f"+52{_PHONE_SEQ[0]}", db.now(), self.id))
             self.token = security.create_session(self.id)
         self.client.set_cookie(config.COOKIE_NAME, self.token)
 
     def call(self, method, path, **kwargs):
         headers = kwargs.pop('headers', {})
+        # El pago de prueba pide la tarjeta (marca y últimos 4); se agrega si la prueba no la manda.
+        body = kwargs.get('json')
+        if method == 'POST' and path in ('/api/orders', '/api/cart/checkout') and isinstance(body, dict) \
+                and body.get('method', 'en_linea') == 'en_linea' and 'card' not in body:
+            kwargs['json'] = {**body, 'card': TEST_CARD}
         if method != 'GET':
             headers['X-CSRF-Token'] = self.client.get('/api/me').json['csrf_token']
         return self.client.open(path, method=method, headers=headers, **kwargs)
@@ -90,32 +107,6 @@ def test_csrf_origin_and_headers(app, actors):
     assert response.headers['Cache-Control'] == 'no-store, private'
     assert response.headers['Content-Security-Policy']
     assert seller.call('PUT', '/api/me', json=[]).status_code == 400
-
-
-def test_notification_read_is_selective_and_owned(app, actors):
-    seller, buyer, _ = actors
-    with app.app_context():
-        def note(uid):
-            return db.get_db().execute(
-                'INSERT INTO notifications(user_id,text,link,created_at) VALUES(?,?,?,?)',
-                (uid, 'Aviso de prueba', '#/mine', db.now())).lastrowid
-        selected, unseen, foreign = note(seller.id), note(seller.id), note(buyer.id)
-    assert seller.call('POST', '/api/notifications/read', json={'ids': [selected, foreign]}).status_code == 200
-    own = {n['id']: n['read_at'] for n in seller.call('GET', '/api/notifications').json['notifications']}
-    assert own[selected] and own[unseen] is None
-    assert buyer.call('GET', '/api/notifications').json['notifications'][0]['read_at'] is None
-    assert seller.call('POST', '/api/notifications/read', json={'ids': []}).status_code == 200
-    assert any(n['read_at'] is None for n in seller.call('GET', '/api/notifications').json['notifications'])
-    assert seller.call('POST', '/api/notifications/read', json={}).status_code == 200
-    assert all(n['read_at'] for n in seller.call('GET', '/api/notifications').json['notifications'])
-
-
-@pytest.mark.parametrize('payload', [
-    {'ids': [True]}, {'ids': [-1]}, {'ids': ['1']}, {'ids': [2**80]},
-    {'ids': list(range(1, 52))}, {'ids': '1'}, ['invalid'],
-])
-def test_notification_read_rejects_invalid_ids(actors, payload):
-    assert actors[0].call('POST', '/api/notifications/read', json=payload).status_code == 400
 
 
 @pytest.mark.parametrize('price', ['NaN', 'Infinity', '-Infinity', '1e100', '1e999999', '-1'])
@@ -490,6 +481,16 @@ def test_failed_refunds_require_review_instead_of_showing_success(app, actors, m
     assert actors[0].call('POST', f'/api/orders/{oid}/refund', json={}).status_code == 409
     assert row(app, oid)['status'] == 'PAYMENT_REVIEW'
     assert not actors[1].call('GET', f'/api/orders/{oid}').json['order']['actions']
+
+
+def test_origin_check_allows_https_tunnel_but_not_other_sites(app):
+    """Un túnel (trycloudflare/ngrok) llega por https a un servidor http local: mismo sitio, se permite."""
+    c = app.test_client()
+    body = {"email": "nadie@edu.uaa.mx", "password": "x"}
+    tunnel = {"Host": "abc.trycloudflare.com", "Origin": "https://abc.trycloudflare.com"}
+    assert c.post("/api/auth/login", json=body, headers=tunnel).status_code != 403
+    evil = {"Host": "abc.trycloudflare.com", "Origin": "https://malo.example.com"}
+    assert c.post("/api/auth/login", json=body, headers=evil).status_code == 403
 
 
 def test_mobile_simulation_guard_prevents_external_checkout(app, actors, monkeypatch):

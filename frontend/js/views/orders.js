@@ -1,6 +1,6 @@
 import { pager } from "../pagination.js";
 import { api } from "../api.js";
-import { esc, icon, money, timeAgo, ask, toast, STATUS } from "../ui.js";
+import { esc, icon, money, timeAgo, ask, toast, statusOf } from "../ui.js";
 
 export async function render(root, ctx) {
   return ctx.args[0] ? detail(root, ctx) : list(root, ctx);
@@ -16,7 +16,7 @@ async function list(root, { state }, page = 1) {
           ${o.image ? `<img class="thumb" src="${esc(o.image)}" alt="">` : '<span class="thumb"></span>'}
           <div class="grow"><div class="t">${esc(o.post_title)}</div>
             <div class="muted small">${tab === "buyer" ? "Vendedor: " + esc(o.seller.name) : "Comprador: " + esc(o.buyer.name)} · ${timeAgo(o.updated_at)}</div>
-            <span class="state ${(STATUS[o.status] || [o.status, "bad"])[1]} small" style="padding:2px 10px;font-size:.8rem">${esc((STATUS[o.status] || [o.status, "bad"])[0])}</span></div>
+            <span class="state ${statusOf(o)[1]} small" style="padding:2px 10px;font-size:.8rem">${esc(statusOf(o)[0])}${o.payment_method === "efectivo" ? " " + icon("cash") : ""}</span></div>
           <b>${money(o.amount_cents)}</b></a>`).join("")
       : `<div class="empty">${icon("bag")}<h2>${tab === "buyer" ? "Todavía no has comprado nada" : "Todavía no tienes ventas"}</h2><p>${tab === "buyer" ? "Cuando pagues un artículo, el dinero quedará retenido aquí hasta que lo recibas." : "Cuando alguien pague uno de tus artículos, lo verás aquí."}</p></div>`;
     root.querySelectorAll("[data-t]").forEach((b) => b.setAttribute("aria-selected", b.dataset.t === tab));
@@ -42,7 +42,26 @@ const STEPS = [
   ["released", "Pago liberado al vendedor", "Solo ahora el dinero pasa al vendedor."],
 ];
 
+const CASH_STEPS = [
+  ["reserved", "Apartado", "El artículo queda reservado para ti mientras se coordinan."],
+  ["delivered", "Entrega y pago en efectivo", "Se ven en un punto seguro del campus; revisa el artículo y paga en mano."],
+  ["paid", "Pago registrado", "El vendedor confirma que recibió el efectivo y la compra se cierra."],
+];
+
+function trackCash(o) {
+  const st = o.status;
+  const idx = st === "RELEASED" ? 3 : 1;
+  return CASH_STEPS.map(([k, t, d], i) => {
+    let cls = i < idx ? "done" : i === idx ? "now" : "idle";
+    let ic = i < idx ? "check" : i === 0 ? "lock" : i === 1 ? "cash" : "check";
+    let title = t, desc = d;
+    if (st === "CANCELLED") { if (i > 0) return ""; cls = "bad"; ic = "undo"; title = "Compra cancelada"; desc = "No se cobró nada; el artículo vuelve a estar disponible."; }
+    return `<li class="${cls}"><span class="dot">${icon(ic)}</span><div><b>${esc(title)}</b><span class="muted small">${esc(desc)}</span></div></li>`;
+  }).join("");
+}
+
 function track(o) {
+  if (o.payment_method === "efectivo") return trackCash(o);
   const st = o.status;
   let idx = { PENDING_PAYMENT: 0, CANCELLED: 0, RELEASING: 3, REFUNDING: 1, PAYMENT_REVIEW: 2, HELD: 1, DELIVERED: 2, DISPUTED: 2, RELEASED: 4, REFUNDED: 1 }[st];
   if (st === "RELEASED") idx = 4;
@@ -62,9 +81,29 @@ const WHERE = {
   RELEASED: "Con el vendedor", REFUNDED: "De vuelta con el comprador",
 };
 
+const BRAND = { visa: "Visa", mastercard: "Mastercard", amex: "American Express", carnet: "Carnet", tarjeta: "Tarjeta" };
+const KIND = { tarjeta: "tarjeta de débito", clabe: "CLABE" };
+
+// Pago con tarjeta: teléfono confirmado de la otra parte (para localizarla si no se entrega) y datos de la tarjeta/cuenta.
+function contactBox(o) {
+  const rows = [];
+  const tel = (who, label) => who.phone
+    ? `<div class="payrow"><span class="payic">${icon("chat")}</span><div class="grow"><b>${esc(label)}: ${esc(who.name)}</b><div class="muted small">Celular confirmado por SMS</div></div>
+        <a class="btn ghost" href="tel:+52${esc(who.phone.replace(/\s/g, ""))}">${esc(who.phone)}</a></div>` : "";
+  if (o.role !== "seller") rows.push(tel(o.seller, "Vendedor"));
+  if (o.role !== "buyer") rows.push(tel(o.buyer, "Comprador"));
+  if (o.card) rows.push(`<div class="payrow"><span class="payic">${icon("card")}</span><div class="grow"><b>Pagado con ${esc(BRAND[o.card.brand] || "tarjeta")} ••${esc(o.card.last4)}</b><div class="muted small">El dinero queda retenido hasta que confirmes la recepción.</div></div></div>`);
+  if (o.payout_account) rows.push(`<div class="payrow"><span class="payic">${icon("cash")}</span><div class="grow"><b>Se depositará en ${esc(KIND[o.payout_account.kind] || "tu cuenta")} ••${esc(o.payout_account.last4)}</b><div class="muted small">Cuando el comprador confirme que recibió el artículo.</div></div></div>`);
+  const body = rows.filter(Boolean).join("");
+  return body ? `<div class="contactbox stack">${body}${o.seller.phone || o.buyer.phone ? '<p class="muted small">Si el artículo no se entrega, primero llámense o escríbanse; si no se resuelve, abre una disputa y administración los contactará.</p>' : ""}</div>` : "";
+}
+
+const WHERE_CASH = { CASH_PENDING: "Se paga en efectivo al entregar", RELEASED: "Pagado en efectivo al vendedor", CANCELLED: "Sin cobro" };
+
 async function detail(root, { args, state, refresh, go }) {
   const { order: o } = await api.get(`/api/orders/${args[0]}`);
-  const [label, kind] = STATUS[o.status] || [o.status, "bad"];
+  const cash = o.payment_method === "efectivo";
+  const [label, kind] = statusOf(o);
   const A = new Set(o.actions);
   const BTN = {
     confirm: `<button class="btn green block" data-a="confirm">${icon("check")} Sí, ya lo recibí: liberar el pago</button>`,
@@ -73,11 +112,13 @@ async function detail(root, { args, state, refresh, go }) {
     refund: `<button class="btn ghost block" data-a="refund">${icon("undo")} Devolver el pago al comprador</button>`,
     resolve_release: `<button class="btn green block" data-a="resolve-release">Liberar al vendedor</button>`,
     resolve_refund: `<button class="btn danger block" data-a="resolve-refund">Reembolsar al comprador</button>`,
+    cash_received: `<button class="btn green block" data-a="cash-received">${icon("cash")} Ya lo entregué y recibí el efectivo</button>`,
+    cancel_cash: `<button class="btn ghost block" data-a="cancel-cash">${icon("undo")} Cancelar compra</button>`,
   };
   const who = o.role === "buyer" ? o.seller : o.buyer;
   const help = {
-    buyer: { HELD: "Coordina la entrega con el vendedor. No confirmes hasta tener el artículo en tus manos.", DELIVERED: "El vendedor dice que ya te lo entregó. Revisa que esté como lo describió y confirma, o cuéntanos si hubo un problema." },
-    seller: { HELD: "El pago ya está retenido. Entrega el artículo en un punto seguro y márcalo como entregado.", DELIVERED: "Esperando a que el comprador confirme la recepción. Tu dinero se libera en cuanto lo haga." },
+    buyer: { CASH_PENDING: "Coordina la entrega por mensaje. Revisa el artículo y paga en efectivo al recibirlo, en un punto seguro del campus.", HELD: "Coordina la entrega con el vendedor. No confirmes hasta tener el artículo en tus manos.", DELIVERED: "El vendedor dice que ya te lo entregó. Revisa que esté como lo describió y confirma, o cuéntanos si hubo un problema." },
+    seller: { CASH_PENDING: "El comprador pagará en efectivo al recibir el artículo. Cuando te pague, regístralo aquí para cerrar la venta.", HELD: "El pago ya está retenido. Entrega el artículo en un punto seguro y márcalo como entregado.", DELIVERED: "Esperando a que el comprador confirme la recepción. Tu dinero se libera en cuanto lo haga." },
   }[o.role]?.[o.status] || "";
 
   root.innerHTML = `
@@ -88,15 +129,18 @@ async function detail(root, { args, state, refresh, go }) {
         <div class="muted small">${o.role === "buyer" ? "Compras a" : "Vendes a"} <b>${esc(who.name)}</b> · orden #${o.id}</div></div>
         <span class="state ${kind}">${icon(kind === "ok" ? "check" : kind === "bad" ? "alert" : "lock")} ${esc(label)}</span></div>
       <div class="money"><div><div class="muted small">Monto</div><div class="amt">${money(o.amount_cents)}</div></div>
-        <div style="text-align:right"><div class="muted small">Dónde está el dinero</div><b>${esc(WHERE[o.status])}</b></div></div>
+        <div style="text-align:right"><div class="muted small">${cash ? "Forma de pago" : "Dónde está el dinero"}</div><b>${esc(cash ? (WHERE_CASH[o.status] || "Efectivo") : WHERE[o.status])}</b></div></div>
       ${help ? `<div class="notice">${esc(help)}</div>` : ""}
-      ${o.simulated ? '<div class="notice">Demostración: esta orden no representa dinero real.</div>' : ''}
+      ${contactBox(o)}
+      ${o.payout_status === "pending" && o.role !== "buyer" ? '<div class="notice">Venta confirmada. Administración te transferirá el importe y registrará la referencia aquí.</div>' : ""}
+      ${o.payout_status === "paid" && o.payout_ref ? `<div class="notice">Pago al vendedor realizado · referencia ${esc(o.payout_ref)}</div>` : ""}
+      ${o.status === "PENDING_PAYMENT" && o.payment_provider === "mercadopago" && o.role === "buyer" ? '<p class="muted small">Si pagaste en OXXO o por SPEI, el pago puede tardar en confirmarse. Usa «Actualizar estado».</p>' : ""}
       ${o.status === 'PENDING_PAYMENT' && o.role === 'buyer' ? '<div class="row wrap"><button class="btn" id="checkout-resume">Continuar pago</button><button class="btn ghost" id="checkout-cancel">Cancelar compra</button></div>' : ''}
       ${['PENDING_PAYMENT', 'RELEASING', 'REFUNDING', 'PAYMENT_REVIEW'].includes(o.status) ? '<button class="btn ghost" id="payment-refresh">Actualizar estado</button><p class="muted small">Si el resultado aún no está confirmado, conserva esta orden y vuelve a consultar.</p>' : ''}
       <ol class="track" aria-label="Avance del pago">${track(o)}</ol>
       ${o.dispute_reason ? `<div class="error">Motivo de la disputa: ${esc(o.dispute_reason)}</div>` : ""}
       <div class="stack" id="acts">${o.actions.map((a) => BTN[a]).join("")}</div>
-      ${o.status === "HELD" || o.status === "DELIVERED" ? `<a class="btn ghost" href="#/chat/${o.post_id}/${who.id}">${icon("chat")} Escribir a ${esc(who.name.split(" ")[0])}</a>` : ""}
+      ${["HELD", "DELIVERED", "CASH_PENDING"].includes(o.status) ? `<a class="btn ghost" href="#/chat/${o.post_id}/${who.id}">${icon("chat")} Escribir a ${esc(who.name.split(" ")[0])}</a>` : ""}
     </div>
     <div class="panelbox"><h3 style="margin-bottom:10px">Historial</h3><div class="log">
       ${o.events.map((e) => `<div><b>${esc(e.actor || "Sistema")}</b> · <span class="muted">${timeAgo(e.created_at)}</span><br>${esc(e.note || e.event)}</div>`).join("")}</div></div>
@@ -117,6 +161,8 @@ async function detail(root, { args, state, refresh, go }) {
     const body = {};
     if (a === "confirm") { if (!(await ask({ title: "¿Recibiste el artículo?", text: "Al confirmar, el dinero se libera al vendedor y ya no se puede revertir.", confirm: "Confirmar y liberar" }))) return; }
     if (a === "dispute") { const r = await ask({ title: "Cuéntanos qué pasó", text: "El dinero seguirá retenido y la administración revisará el caso.", field: "No llegó, no es como se describió…", confirm: "Abrir disputa" }); if (!r) return; body.reason = r; }
+    if (a === "cash-received") { if (!(await ask({ title: "¿Ya te pagaron?", text: "Confirma solo si ya entregaste el artículo y recibiste el efectivo. La venta se cerrará.", confirm: "Sí, recibí el pago" }))) return; }
+    if (a === "cancel-cash") { if (!(await ask({ title: "¿Cancelar la compra?", text: "El artículo vuelve a estar disponible para otras personas.", confirm: "Cancelar compra", danger: true }))) return; }
     if (a === "refund") { if (!(await ask({ title: "¿Devolver el pago?", text: "El comprador recupera su dinero y tu artículo vuelve a publicarse.", confirm: "Devolver pago", danger: true }))) return; }
     if (a.startsWith("resolve")) { const n = await ask({ title: a === "resolve-release" ? "Liberar al vendedor" : "Reembolsar al comprador", text: "Escribe la razón de tu decisión.", field: "Motivo de la resolución", confirm: "Resolver" }); if (!n) return; body.note = n; }
     b.disabled = true;

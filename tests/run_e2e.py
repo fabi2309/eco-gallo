@@ -15,7 +15,7 @@ def main():
         os.environ.update(ECOGALLO_DATA=data, ECOGALLO_DEV='1', ECOGALLO_ENV='development',
                           ECOGALLO_BACKUP_ENABLED='0', ECOGALLO_RECONCILE_ENABLED='0',
                           PAYMENT_PROVIDER='simulado', ECOGALLO_AUTH_LIMIT='1000',
-                          ECOGALLO_ADMINS='admin@edu.uaa.mx')
+                          ECOGALLO_ADMINS='admin@edu.uaa.mx', ECOGALLO_NO_DOTENV='1')
         from webapp import app
         from waitress import create_server
         server = create_server(app, host='127.0.0.1', port=0, threads=8)

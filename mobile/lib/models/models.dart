@@ -30,11 +30,23 @@ class Post {
     required this.images,
     required this.author,
     required this.centro,
+    this.meetPlace = '',
+    this.meetLat,
+    this.meetLng,
+    this.newPriceCents = 0,
+    this.featured = false,
+    this.stats = const {},
+    this.distanceKm,
   });
   final int id, priceCents;
   final String title, description, category, tipo, condition, status, centro;
   final List<String> images;
   final Student author;
+  final String meetPlace;
+  final double? meetLat, meetLng, distanceKm;
+  final int newPriceCents;
+  final bool featured;
+  final Map<String, dynamic> stats;
   factory Post.fromJson(Map<String, dynamic> json) => Post(
     id: json['id'] as int,
     title: json['title'] as String,
@@ -47,6 +59,13 @@ class Post {
     centro: json['centro'] as String? ?? 'General',
     images: List<String>.from(json['images'] as List? ?? []),
     author: Student.fromJson(json['author'] as Map<String, dynamic>),
+    meetPlace: json['meeting']?['place'] as String? ?? '',
+    meetLat: (json['meeting']?['lat'] as num?)?.toDouble(),
+    meetLng: (json['meeting']?['lng'] as num?)?.toDouble(),
+    newPriceCents: json['new_price_cents'] as int? ?? 0,
+    featured: json['featured'] == true,
+    stats: json['stats'] as Map<String, dynamic>? ?? {},
+    distanceKm: (json['distance_km'] as num?)?.toDouble(),
   );
 
   String get priceLabel => tipo == 'donacion'

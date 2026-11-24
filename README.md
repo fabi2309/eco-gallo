@@ -14,25 +14,30 @@ $env:ECOGALLO_ADMINS="admin@edu.uaa.mx"
 python run_dev.py
 ```
 
-Los códigos de acceso se muestran en pantalla solo en DEV. Accede con un correo institucional; la primera vez completa nombre y carrera. El administrador se asigna desde `ECOGALLO_ADMINS`. No hay una contraseña administrativa universal.
+Los códigos de acceso se muestran en pantalla solo en DEV. Accede con un correo institucional; la primera vez completa nombre y carrera y acepta los términos. El administrador se asigna desde `ECOGALLO_ADMINS`. Esta versión incluye la contraseña pública **EcoGallo2026** exclusivamente para la administración de demostración: con DEV y administradores configurados, el arranque puede restablecerla. Para conservar tus cuentas y contraseñas utiliza el servidor móvil descrito abajo, que desactiva ese aprovisionamiento.
 
-**La demostración no cobra ni transfiere dinero y no pide RFC ni cuenta bancaria.** Sus saldos, compras y reembolsos son ficticios y están señalados. Es suficiente para probar el flujo completo de entrega, confirmación, disputas y devoluciones.
+**La demostración no cobra ni transfiere dinero y no pide RFC ni cuenta bancaria completa.** Permite efectivo al entregar y tarjeta ficticia. La simulación con tarjeta requiere teléfono confirmado y una referencia ficticia de cobro del vendedor (titular, tipo y últimos cuatro dígitos). Sus saldos, compras y reembolsos son ficticios y están señalados.
 
-Las variables se leen del entorno del proceso. `.env.example` es una plantilla; copiarla a `.env` no la carga automáticamente. Docker sí puede leer un archivo mediante `--env-file`.
+Las variables se leen del entorno del proceso y, cuando faltan, del archivo opcional `.env` de la raíz. `.env.example` es una plantilla. `ECOGALLO_NO_DOTENV=1` desactiva esa lectura; los servidores móviles fuerzan un entorno local seguro y pagos simulados. Docker también puede leer un archivo mediante `--env-file`.
 
 ## Funciones
 
 ### Aplicación móvil Android
 
-El cliente Flutter está en `mobile/`: acceso, perfil, catálogo y publicaciones con fotos, favoritos, deseos, mensajes, notificaciones, compras y ventas simuladas, saldo, actividad e impacto. Incluye «Mis publicaciones», edición, pausa, reanudación y cierre de donaciones o trueques; conserva la revisión administrativa de la web. Para una prueba aislada ejecuta `run_mobile_demo.bat` y, en otra terminal con el emulador encendido, `run_mobile.bat`. Consulta los pasos, cuentas de demo y alcance en [mobile/README.md](mobile/README.md).
+El cliente Flutter está en `mobile/`: acceso, perfil, catálogo y publicaciones con fotos, favoritos, deseos, chat incremental con «Visto», notificaciones, carrito, compras en efectivo o simuladas, saldo, actividad e impacto mensual. Incluye términos y privacidad, consulta de datos personales y baja protegida, teléfono y referencias ficticias de cobro, puntos de entrega, búsqueda por coordenadas, destacados y estadísticas. Conserva la revisión administrativa de la web. Para una prueba aislada ejecuta `run_mobile_demo.bat` y, en otra terminal con el emulador encendido, `run_mobile.bat`. Consulta los pasos, cuentas de demo y alcance en [mobile/README.md](mobile/README.md).
+
+Para usar **los datos principales por USB**, ejecuta `servidor_movil.bat --usb --codigos-locales` y después `conectar_movil_usb.bat`. El servidor crea un respaldo preventivo, conserva las contraseñas y no agrega publicaciones de demo. El APK se genera con `crear_apk_local.bat` y queda en `artifacts/mobile/ECO-GALLO-local.apk`. La dirección en Android es `http://127.0.0.1:8080`; el teléfono accede a la API, nunca directamente a SQLite.
 
 ### Aplicación web
 
 - Acceso institucional por correo, contraseña y 2FA opcional con códigos de recuperación.
+- Acceso Microsoft configurable, aviso de privacidad y términos versionados, exportación de datos y baja protegida de la cuenta.
 - Restablecimiento de contraseña después de verificar correo y, si está activado, 2FA; autorización de 10 minutos y un solo uso.
 - Registro de egresados con revisión administrativa y documentos privados.
 - Publicación en tres pasos, hasta cinco fotografías, premoderación y nueva revisión al cambiar contenido o fotos; pausa y reanudación.
 - Catálogo con búsqueda, sugerencias, filtros, paginación, favoritos y lista de deseos con alertas de coincidencia o reducción de precio.
+- Carrito, pago en efectivo al entregar, ubicación aproximada, destacados, estadísticas del vendedor e impacto mensual con ahorro estimado.
+- Instalación web PWA; la caché del navegador conserva la interfaz, sin guardar respuestas privadas de API ni ofrecer operaciones sin servidor.
 - Perfil, fotografía, biografía, insignias e historial paginado.
 - Mensajes por publicación, notificaciones, reportes y puntos de encuentro.
 - Compras y ventas con estados protegidos, historial, disputas y resolución administrativa.
@@ -47,6 +52,7 @@ El cliente Flutter está en `mobile/`: acceso, perfil, catálogo y publicaciones
 | `simulado` | Desarrollo sin dinero, RFC, datos bancarios ni claves. |
 | `disabled` | Marketplace operativo con contacto por mensajes y sin cobros en línea. Predeterminado en producción. |
 | `stripe` | Stripe Checkout y Connect; requiere claves, webhook y cuentas habilitadas. |
+| `mercadopago` | Checkout Pro configurable; requiere credenciales, URL pública y webhook. No se probó un cobro real. |
 
 La transferencia al banco real exige completar los requisitos de Stripe. El RFC depende del tipo de cuenta y las verificaciones solicitadas; el sistema no omite ni falsifica esos requisitos. Consulta [configuración, recuperación y límites de operación](docs/OPERACION.md).
 

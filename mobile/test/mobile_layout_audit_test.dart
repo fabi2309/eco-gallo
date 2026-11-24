@@ -15,6 +15,9 @@ import 'package:eco_gallo_mobile/features/catalog/detail_screen.dart';
 import 'package:eco_gallo_mobile/features/community/chat_screen.dart';
 import 'package:eco_gallo_mobile/features/community/community_screens.dart';
 import 'package:eco_gallo_mobile/features/orders/orders_screen.dart';
+import 'package:eco_gallo_mobile/features/orders/checkout_screen.dart';
+import 'package:eco_gallo_mobile/features/orders/payment_settings_screen.dart';
+import 'package:eco_gallo_mobile/features/community/legal_screen.dart';
 import 'package:eco_gallo_mobile/features/posts/post_editor_screen.dart';
 import 'package:eco_gallo_mobile/features/posts/my_posts_screen.dart';
 
@@ -98,6 +101,7 @@ ApiClient testApi({bool pending = false}) => ApiClient(
           ],
         };
       case '/api/threads/2/2':
+      case '/api/threads/2/2/since':
         data = {
           'other': {'name': 'Compañero con nombre extenso'},
           'post': post,
@@ -126,6 +130,29 @@ ApiClient testApi({bool pending = false}) => ApiClient(
               'created_at': 1,
               'read_at': null,
               'link': '#/post/2',
+            },
+          ],
+        };
+      case '/api/legal':
+        data = {
+          'version': 'test-v1',
+          'operator': 'Equipo de prueba',
+          'documents': {
+            'privacy': 'Aviso de privacidad de prueba',
+            'terms': 'Términos de uso de prueba',
+          },
+        };
+      case '/api/cart':
+        data = {
+          'count': 1,
+          'total_cents': 1000000,
+          'items': [
+            {
+              'post_id': 2,
+              'title': post['title'],
+              'seller_name': 'Compañero',
+              'price_cents': 1000000,
+              'available': true,
             },
           ],
         };
@@ -191,6 +218,11 @@ void main() {
     'Deseos': (api, s) => WishlistScreen(s),
     'Notificaciones': (api, s) => NotificationsScreen(s, PhotoPickerService()),
     'Pedido': (api, s) => OrderDetailScreen(api, 1),
+    'Carrito': (api, s) => CartScreen(api),
+    'Compra': (api, s) => CheckoutScreen(api, postId: 2),
+    'Teléfono y cobros': (api, s) => PaymentSettingsScreen(api),
+    'Consentimiento': (api, s) => LegalScreen(s, requiredConsent: true),
+    'Privacidad': (api, s) => LegalScreen(s),
     'Perfil': (api, s) => ProfileScreen(s, PhotoPickerService()),
     'Saldo': (api, s) => WalletScreen(api),
     'Impacto': (api, s) => ImpactScreen(api),

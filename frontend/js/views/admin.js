@@ -6,11 +6,12 @@ import { esc, icon, money, timeAgo, ask, toast } from "../ui.js";
 export async function render(root, { state, refresh, go }) {
   if (state.user.role !== "admin") return go("#/");
   
-  const [d, bks, metrics, pending] = await Promise.all([
+  const [d, bks, metrics, pending, pay] = await Promise.all([
     api.get(`/api/admin/overview?page=${state.adminUsersPage || 1}`),
     api.get("/api/admin/backups").catch(() => ({ ok: false, backups: [], config: {} })),
     api.get("/api/admin/metrics").catch(() => ({ ok: false, users_monthly: [], posts_category: [], transactions: [] })),
     api.get("/api/admin/posts/pending").catch(() => ({ ok: false, posts: [] })),
+    api.get("/api/admin/payouts").catch(() => ({ ok: false, payouts: [], total_cents: 0 })),
   ]);
   
   const s = d.stats;
@@ -71,6 +72,12 @@ export async function render(root, { state, refresh, go }) {
           : `<a target="_blank" rel="noopener" href="/api/admin/verifications/${v.id}/file"><img class="doc" src="/api/admin/verifications/${v.id}/file" alt="${esc(v.doc_label)} de ${esc(v.name)}"></a>`}
         <div class="row wrap"><button class="btn sm green" data-ok="${v.id}">Aprobar</button><button class="btn sm danger" data-no="${v.id}">Rechazar</button></div></div></div>`).join("")
         : '<p class="muted">No hay documentos pendientes.</p>'}</div>
+    ${pay.payouts.length || state.meta.payment_provider === "mercadopago" ? `<div class="panelbox stack" id="payouts"><h2>Pagos por liquidar a vendedores ${pay.payouts.length ? `<span class="badge inline">${pay.payouts.length}</span>` : ""}</h2>
+      <p class="muted small">Ventas cobradas con Mercado Pago que el comprador ya confirmó. Transfiere el importe al vendedor (SPEI o Mercado Pago) y registra la referencia. Total: <b>${money(pay.total_cents)}</b>.</p>
+      ${pay.payouts.length ? pay.payouts.map((o) => `<div class="item"><div class="grow"><div class="t">${esc(o.post_title)} · ${money(o.amount_cents)}</div>
+        <div class="muted small">Vendedor: ${esc(o.seller_name)} · ${esc(o.seller_email)} · confirmada ${timeAgo(o.updated_at)} · pago MP ${esc(o.provider_payment_id)}</div></div>
+        <div class="row"><a class="btn sm ghost" href="#/order/${o.id}">Ver orden</a><button class="btn sm green" data-payout="${o.id}">Registrar pago</button></div></div>`).join("")
+        : '<p class="muted">No hay pagos pendientes de liquidar.</p>'}</div>` : ""}
     <div class="panelbox stack"><h2>Disputas</h2>
       ${d.disputes.length ? d.disputes.map((o) => `<a class="item" href="#/order/${o.id}"><div class="grow"><div class="t">${esc(o.post_title)} · ${money(o.amount_cents)}</div>
         <div class="muted small">${esc(o.buyer.name)} ↔ ${esc(o.seller.name)} · ${timeAgo(o.updated_at)}</div><div class="small">“${esc(o.dispute_reason)}”</div></div><span class="btn sm">Resolver</span></a>`).join("") : '<p class="muted">No hay disputas pendientes.</p>'}</div>
@@ -121,6 +128,11 @@ export async function render(root, { state, refresh, go }) {
   renderBars(root.querySelector('#chartTransactions'), (metrics.transactions || []).map(x => [x.month, x.count]));
 
   // Event Listeners existentes
+  root.querySelectorAll("[data-payout]").forEach((b) => (b.onclick = async () => {
+    const ref = await ask({ title: "Registrar pago al vendedor", text: "Escribe la referencia de la transferencia (clave de rastreo SPEI o id del envío).", field: "Referencia", confirm: "Registrar", minLength: 4 });
+    if (!ref) return;
+    try { await api.post(`/api/admin/payouts/${b.dataset.payout}`, { reference: ref }); toast("Pago registrado"); refresh(); } catch (e) { toast(e.message, true); }
+  }));
   root.querySelectorAll("[data-ok]").forEach((b) => (b.onclick = async () => {
     if (!(await ask({ title: "¿Aprobar este egresado?", text: "Confirma que el documento es legible y coincide con su nombre y carrera.", confirm: "Aprobar" }))) return;
     try { await api.post(`/api/admin/verifications/${b.dataset.ok}/review`, { action: "approve" }); toast("Egresado verificado"); refresh(); } catch (e) { toast(e.message, true); }

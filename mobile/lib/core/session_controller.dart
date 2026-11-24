@@ -3,7 +3,15 @@ import 'package:flutter/foundation.dart';
 import '../models/models.dart';
 import 'api_client.dart';
 
-enum SessionPhase { loading, offline, signedOut, profile, pending, signedIn }
+enum SessionPhase {
+  loading,
+  offline,
+  signedOut,
+  profile,
+  pending,
+  terms,
+  signedIn,
+}
 
 class SessionController extends ChangeNotifier {
   SessionController(this.api, {this.saveServer}) {
@@ -86,6 +94,8 @@ class SessionController extends ChangeNotifier {
         ? SessionPhase.profile
         : data['needs_verification'] == true
         ? SessionPhase.pending
+        : data['needs_terms'] == true
+        ? SessionPhase.terms
         : SessionPhase.signedIn;
     final verification = data['verification'] as Map<String, dynamic>?;
     verificationMessage = verification?['note'] as String? ?? '';

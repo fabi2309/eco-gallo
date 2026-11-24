@@ -25,6 +25,8 @@ const P = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2z"/><path d="M10 21h4"/>',
   shield: '<path d="M12 3 4 6v6c0 5 3.500 8 8 9 4.500-1 8-4 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/>',
+  cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
+  card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   box: '<path d="M3 8l9-5 9 5v8l-9 5-9-5V8z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
@@ -60,6 +62,8 @@ const P = {
   play: '<path d="M7 4.500v15l12-7.500z"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13" r="3.500"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  star: '<path d="m12 3 2.700 5.600 6.100.9-4.400 4.300 1 6.100L12 17l-5.400 2.900 1-6.100L3.200 9.500l6.100-.9z"/>',
+  pin: '<path d="M12 21s-7-6.200-7-12a7 7 0 0 1 14 0c0 5.800-7 12-7 12z"/><circle cx="12" cy="9" r="2.500"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
 };
 export const icon = (n) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${P[n] || ""}</svg>`;
@@ -93,12 +97,66 @@ export function ask({ title, text = "", field = null, confirm = "Aceptar", dange
   });
 }
 
+// Elegir forma de pago: Mercado Pago (protegido) o efectivo al entregar. Devuelve "en_linea", "efectivo" o null.
+export function choosePayment({ meta, total, many = false, acceptsCard = true }) {
+  const online = (meta.payment_methods || []).includes("en_linea");
+  const onlineName = meta.payment_provider === "mercadopago" ? "Tarjeta con Mercado Pago"
+    : meta.payment_provider === "stripe" ? "Tarjeta (Stripe)" : "Tarjeta de crédito o débito";
+  const cardText = !acceptsCard
+    ? (many ? "Algún vendedor de tu carrito" : "Este vendedor") + " todavía no activó los cobros con tarjeta."
+    : (meta.payment_provider === "mercadopago" ? "Tarjeta, OXXO o SPEI en la página de Mercado Pago. " : "")
+      + "Tu dinero queda retenido y el vendedor lo recibe cuando confirmas que te entregó" + (many ? " cada artículo." : " el artículo.")
+      + " Pide confirmar tu celular por SMS.";
+  const opts = [
+    online && ["en_linea", "card", onlineName, cardText, !acceptsCard],
+    ["efectivo", "cash", "Efectivo al entregar",
+      "Apartas " + (many ? "los artículos" : "el artículo") + " y pagas en mano al recibir" + (many ? "los" : "lo")
+      + " en un punto seguro del campus. Revisa el artículo antes de pagar.", false],
+  ].filter(Boolean);
+  const first = opts.findIndex((o) => !o[4]);
+  return new Promise((resolve) => {
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-label="Forma de pago">
+      <h2>¿Cómo quieres pagar?</h2><p class="muted">Total: <b>${esc(money(total))}</b></p>
+      <div class="paychoice" role="radiogroup" aria-label="Forma de pago">${opts.map(([v, ic, t, d, off], i) => `
+        <label class="payopt ${off ? "off" : ""}"><input type="radio" name="m" value="${v}" ${i === first ? "checked" : ""} ${off ? "disabled" : ""}>
+          <span class="payic">${icon(ic)}</span><span><b>${esc(t)}</b><span class="muted small">${esc(d)}</span></span></label>`).join("")}</div>
+      <div class="row"><button type="button" class="btn ghost grow" data-x>Cancelar</button>
+      <button class="btn grow" id="go">Continuar</button></div></form>`;
+    const done = (v) => { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+    const onKey = (e) => e.key === "Escape" && done(null);
+    const label = () => {
+      const v = ov.querySelector("input:checked").value;
+      ov.querySelector("#go").textContent = v === "efectivo" ? (many ? "Apartar artículos" : "Apartar artículo") : "Continuar con tarjeta";
+    };
+    ov.addEventListener("click", (e) => e.target === ov && done(null));
+    ov.querySelector("[data-x]").onclick = () => done(null);
+    ov.querySelectorAll("input").forEach((r) => (r.onchange = label));
+    ov.querySelector("form").onsubmit = (e) => { e.preventDefault(); done(ov.querySelector("input:checked").value); };
+    document.addEventListener("keydown", onKey);
+    document.body.append(ov);
+    label();
+    ov.querySelector("input:checked").focus();
+  });
+}
+
+// Etiqueta de estado de una orden (las de efectivo tienen sus propios textos).
+export function statusOf(o) {
+  if (o.payment_method === "efectivo") {
+    if (o.status === "RELEASED") return ["Pagado en efectivo", "ok"];
+    if (o.status === "CANCELLED") return ["Compra cancelada", "bad"];
+  }
+  return STATUS[o.status] || [o.status, "bad"];
+}
+
 export const TIPO = { venta: "Venta", trueque: "Trueque", donacion: "Donación" };
 export const STATUS = {
   RELEASING: ["Confirmando transferencia", ""],
   REFUNDING: ["Reembolso en proceso", ""],
   PAYMENT_REVIEW: ["Pago en revisión administrativa", "bad"],
   PENDING_PAYMENT: ["Pago pendiente", "bad"],
+  CASH_PENDING: ["Apartado · pago en efectivo", ""],
   HELD: ["Pago retenido", ""],
   DELIVERED: ["Entregado · esperando confirmación", ""],
   RELEASED: ["Pago liberado", "ok"],

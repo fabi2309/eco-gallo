@@ -474,6 +474,18 @@ class ImpactScreen extends StatelessWidget {
         data['co2_note'] as String? ??
             'Estimación orientativa, no una medición.',
       ),
+      Text('Ahorro económico estimado: ${money(data['savings_cents'])}'),
+      const Text(
+        'El ahorro usa precios nuevos declarados o referencias estimadas por categoría.',
+      ),
+      for (final month in data['monthly'] as List? ?? [])
+        ListTile(
+          title: Text('${month['month']}'),
+          subtitle: Text(
+            '${month['items']} materiales · ${month['co2_kg']} kg CO₂e estimados',
+          ),
+          trailing: Text(money(month['savings_cents'])),
+        ),
       const SizedBox(height: 16),
       const Text(
         'Publicaciones por categoría',

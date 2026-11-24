@@ -144,6 +144,12 @@ void main() {
         Future<int> buy(int pid, String title) async {
           await openPost(pid, title);
           await tapKey('buy-demo');
+          await waitFor(find.byKey(const Key('checkout-method')));
+          await tapKey('checkout-method');
+          await tap(find.text('Tarjeta ficticia · simulación').last);
+          await enter('card-holder', 'Persona de prueba');
+          await enter('card-last4', '4242');
+          await tapKey('confirm-checkout');
           await tap(find.text('Confirmar'));
           await waitFor(find.byKey(const Key('order-status')));
           expect(find.text('Pago retenido'), findsOneWidget);
@@ -189,6 +195,12 @@ void main() {
         await tester.pageBack();
         await tester.pumpAndSettle();
         await tapKey('buy-demo');
+        await waitFor(find.byKey(const Key('checkout-method')));
+        await tapKey('checkout-method');
+        await tap(find.text('Tarjeta ficticia · simulación').last);
+        await enter('card-holder', 'Persona de prueba');
+        await enter('card-last4', '4242');
+        await tapKey('confirm-checkout');
         await tap(find.text('Confirmar'));
         await waitFor(find.byKey(const Key('order-status')));
         final orderId =

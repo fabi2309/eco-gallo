@@ -6,6 +6,7 @@ import '../../ui/remote_page.dart';
 import '../../ui/shared.dart';
 import '../community/chat_screen.dart';
 import '../orders/orders_screen.dart';
+import '../orders/checkout_screen.dart';
 
 class DetailScreen extends StatelessWidget {
   const DetailScreen(this.api, this.id, {super.key});
@@ -100,44 +101,28 @@ class DetailScreen extends StatelessWidget {
             icon: const Icon(Icons.chat_outlined),
             label: const Text('Contactar'),
           ),
-        if (!own &&
-            p.status == 'active' &&
-            p.tipo == 'venta' &&
-            mode == 'demo') ...[
-          const PaymentNotice('demo'),
+        if (!own && p.status == 'active' && p.tipo == 'venta') ...[
           FilledButton(
-            key: const Key('buy-demo'),
-            onPressed: state.busy || state.loading
+            key: Key(mode == 'demo' ? 'buy-demo' : 'buy-cash'),
+            onPressed: () => state.open(CheckoutScreen(api, postId: id)),
+            child: const Text('Comprar · elegir forma de pago'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('add-cart'),
+            onPressed: state.busy
                 ? null
                 : () => state.run(() async {
-                    if (!await confirmAction(
-                      context,
-                      'Comprar en demostración',
-                      'Se reservará este material y se registrará un pago ficticio de ${p.priceLabel}. No se mueve dinero real.',
-                    )) {
-                      return;
-                    }
-                    final result = await api.post('/api/orders', {
-                      'post_id': id,
-                      'simulation_only': true,
-                    });
+                    await api.post('/api/cart', {'post_id': id});
                     if (context.mounted) {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              OrderDetailScreen(api, result['id'] as int),
-                        ),
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Agregado al carrito.')),
                       );
                     }
                   }),
-            child: const Text('Comprar · pago simulado'),
+            icon: const Icon(Icons.add_shopping_cart),
+            label: const Text('Agregar al carrito'),
           ),
         ],
-        if (!own && p.tipo == 'venta' && mode != 'demo')
-          const Text(
-            'En este modo las compras se gestionan desde la web. Puedes contactar al autor desde aquí.',
-          ),
         if (raw['live_order'] != null)
           OutlinedButton(
             onPressed: () => state.open(
@@ -149,6 +134,12 @@ class DetailScreen extends StatelessWidget {
         Text(p.description, style: const TextStyle(fontSize: 16, height: 1.5)),
         const SizedBox(height: 20),
         Text('Estado del material: ${p.condition}'),
+        if (p.meetPlace.isNotEmpty) Text('Entrega: ${p.meetPlace}'),
+        if (p.meetLat != null && p.meetLng != null)
+          SelectableText('Ubicación aproximada: ${p.meetLat}, ${p.meetLng}'),
+        if (p.newPriceCents > 0)
+          Text('Precio nuevo de referencia: ${money(p.newPriceCents)}'),
+        if (p.featured) const Text('Publicación destacada'),
         const Divider(height: 32),
         Text(
           p.author.name,

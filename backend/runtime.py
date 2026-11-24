@@ -1,6 +1,7 @@
 """Request hardening and single-process maintenance coordination."""
 import contextlib
 import hmac
+import os
 import threading
 import time
 from urllib.parse import urlsplit
@@ -67,7 +68,7 @@ def exclusive():
 
 
 def protect_request():
-    if request.path == '/api/stripe/webhook':
+    if request.path in ('/api/stripe/webhook', '/api/mercadopago/webhook'):
         return
     if request.is_json and request.method not in ('GET', 'HEAD', 'OPTIONS'):
         if not isinstance(request.get_json(silent=True), dict):
@@ -86,10 +87,20 @@ def protect_request():
     if request.method in ('GET', 'HEAD', 'OPTIONS'):
         return
     origin = request.headers.get('Origin')
-    expected = urlsplit(config.PUBLIC_URL or request.host_url)
     if origin:
         actual = urlsplit(origin)
-        if (actual.scheme, actual.netloc) != (expected.scheme, expected.netloc):
+        if config.PUBLIC_URL:
+            expected = urlsplit(config.PUBLIC_URL)
+            ok = (actual.scheme, actual.netloc) == (expected.scheme, expected.netloc)
+        else:
+            # Sin URL pública fija (desarrollo, o un túnel como trycloudflare/ngrok que llega por https a un
+            # servidor local http): basta con que el origen sea el mismo sitio que recibió la solicitud.
+            hosts = {request.host}
+            proxy_token = os.environ.get('ECOGALLO_PROXY_TOKEN', '')
+            if proxy_token and hmac.compare_digest(request.headers.get('X-Ecogallo-Proxy', ''), proxy_token):
+                hosts.add(request.headers.get('X-Forwarded-Host', ''))
+            ok = actual.scheme in ('http', 'https') and actual.netloc in hosts
+        if not ok:
             return api_error('Origen de solicitud no permitido.', 403)
     if request.headers.get('Sec-Fetch-Site') == 'cross-site':
         return api_error('Origen de solicitud no permitido.', 403)
@@ -104,7 +115,7 @@ def response_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'same-origin'
-    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(self)'
     if config.PRODUCTION:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000'
     if request.path.startswith('/api/'):
